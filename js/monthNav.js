@@ -5,6 +5,12 @@ import { monthKey } from './state.js';
 let selected = monthKey();
 const listeners = new Set();
 
+export const MONTH_NAMES_SHORT = ['იან', 'თებ', 'მარ', 'აპრ', 'მაი', 'ივნ', 'ივლ', 'აგვ', 'სექ', 'ოქტ', 'ნოე', 'დეკ'];
+export const MONTH_NAMES_FULL = [
+  'იანვარი', 'თებერვალი', 'მარტი', 'აპრილი', 'მაისი', 'ივნისი',
+  'ივლისი', 'აგვისტო', 'სექტემბერი', 'ოქტომბერი', 'ნოემბერი', 'დეკემბერი'
+];
+
 export function getSelectedMonth() {
   return selected;
 }
@@ -28,7 +34,6 @@ export function onMonthChange(fn) {
 }
 
 export function monthLabel(key) {
-  const names = ['იან', 'თებ', 'მარ', 'აპრ', 'მაი', 'ივნ', 'ივლ', 'აგვ', 'სექ', 'ოქტ', 'ნოე', 'დეკ'];
   const [y, m] = key.split('-').map(Number);
-  return `${names[m - 1]} ${y}`;
+  return `${MONTH_NAMES_SHORT[m - 1]} ${y}`;
 }

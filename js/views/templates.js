@@ -1,10 +1,17 @@
 // views/templates.js — Templates CRUD per master-prompt §5.3.
 
-import { getState, updateState } from '../state.js';
+import { getState, updateState, FREE_BUCKET_ID } from '../state.js';
 import { isTemplateDueInMonth, gelToEur, formatMoney, parseAmountInput } from '../calc.js';
 import { el, openModal, confirmDialog, toast, formatDate } from '../ui.js';
 import { monthKey } from '../state.js';
 import { getSelectedMonth } from '../monthNav.js';
+import { bucketChip } from '../components.js';
+
+function bucketOfCategory(state, category) {
+  if (!category) return null;
+  if (category.bucketId === FREE_BUCKET_ID) return { id: FREE_BUCKET_ID, name: 'თავისუფალი ხარჯვა', color: '#94a3b8' };
+  return state.settings.buckets.find(b => b.id === category.bucketId) || null;
+}
 
 const CYCLE_OPTIONS = [
   { value: 1, label: 'ყოველ თვე' },
@@ -62,7 +69,9 @@ export function renderTemplates(root) {
       const main = el('div', { class: 'row__main' }, [
         el('div', { class: 'row__name', text: tpl.name }),
         el('div', { class: 'row__meta' }, [
+          bucketChip(bucketOfCategory(state, category)),
           el('span', { class: 'chip', text: category ? category.name : '—' }),
+          category?.georgiaTransfer ? el('span', { class: 'chip chip--georgia', text: '🇬🇪' }) : null,
           el('span', { class: 'chip', text: tpl.type === 'fixed' ? 'ფიქსირებული' : 'ცვლადი' }),
           el('span', { class: 'chip', text: cycleLabel }),
           el('span', { class: 'chip', text: ownerLabel })

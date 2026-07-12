@@ -2,6 +2,7 @@
 
 import { loadState, getState } from './state.js';
 import { runSelfChecks } from './calc.js';
+import { initAutoSync } from './sync.js';
 import { renderDashboard } from './views/dashboard.js';
 import { renderTransactions } from './views/transactions.js';
 import { renderTemplates } from './views/templates.js';
@@ -95,6 +96,8 @@ function init() {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js').catch(err => console.warn('[sw] registration failed', err));
   }
+
+  initAutoSync();
 }
 
 export { applyAppearance, checkBackupReminder };

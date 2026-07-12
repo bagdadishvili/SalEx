@@ -57,11 +57,17 @@ function csvEscape(value) {
 
 export function exportCsv() {
   const state = getState();
-  const { categories, months } = state;
-  const bucketOf = (id) => categories.find(c => c.id === id)?.bucket || '';
+  const { categories, settings, months } = state;
+  const bucketNameOf = (id) => {
+    const cat = categories.find(c => c.id === id);
+    if (!cat) return '';
+    if (cat.bucketId === 'free') return 'თავისუფალი ხარჯვა';
+    return settings.buckets.find(b => b.id === cat.bucketId)?.name || '';
+  };
   const nameOf = (id) => categories.find(c => c.id === id)?.name || '';
+  const georgiaOf = (id) => (categories.find(c => c.id === id)?.georgiaTransfer ? 'yes' : 'no');
 
-  const headers = ['month', 'name', 'category', 'bucket', 'owner', 'currency', 'amount_planned', 'amount_actual', 'amount_eur', 'rate_used', 'paid', 'paid_at', 'due_date', 'note'];
+  const headers = ['month', 'name', 'category', 'bucket', 'georgia_transfer', 'owner', 'currency', 'amount_planned', 'amount_actual', 'amount_eur', 'rate_used', 'paid', 'paid_at', 'due_date', 'note'];
   const rows = [headers.join(',')];
 
   Object.keys(months).sort().forEach(monthKey => {
@@ -73,7 +79,8 @@ export function exportCsv() {
         monthKey,
         t.name,
         nameOf(t.categoryId),
-        bucketOf(t.categoryId),
+        bucketNameOf(t.categoryId),
+        georgiaOf(t.categoryId),
         t.owner,
         t.currency,
         t.amountPlanned,

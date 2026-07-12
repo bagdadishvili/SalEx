@@ -1,6 +1,8 @@
 // calc.js — all money math: currency conversion, dashboard aggregates, plan-vs-actual.
 // Pure functions only (no DOM, no state mutation) so they're easy to self-check and unit-test.
 
+const FREE_BUCKET_ID = 'free';
+
 /** GEL -> EUR at a given rate (rate = GEL per 1 EUR). */
 export function gelToEur(amountGel, rate) {
   if (!rate || rate <= 0) return 0;
@@ -23,112 +25,116 @@ export function txnPlannedEur(txn, monthRate) {
   return txn.amountPlanned;
 }
 
-function categoryBucketMap(categories) {
+function categoryMap(categories) {
   const map = {};
-  categories.forEach(c => { map[c.id] = c.bucket; });
+  categories.forEach(c => { map[c.id] = c; });
   return map;
 }
 
-/** Sum of planned amounts (EUR) for transactions whose category is in `bucket`. */
-export function sumPlannedByBucket(month, categories, bucket) {
-  const bucketMap = categoryBucketMap(categories);
+function sumPlannedByBucket(month, categories, bucketId) {
+  const catMap = categoryMap(categories);
   return month.transactions
-    .filter(t => bucketMap[t.categoryId] === bucket)
+    .filter(t => catMap[t.categoryId]?.bucketId === bucketId)
     .reduce((sum, t) => sum + txnPlannedEur(t, month.exchangeRate), 0);
 }
 
-/** Sum of actual amounts (EUR) for PAID transactions whose category is in `bucket`. */
-export function sumActualByBucket(month, categories, bucket) {
-  const bucketMap = categoryBucketMap(categories);
+function sumActualByBucket(month, categories, bucketId) {
+  const catMap = categoryMap(categories);
   return month.transactions
-    .filter(t => bucketMap[t.categoryId] === bucket && t.paid)
+    .filter(t => catMap[t.categoryId]?.bucketId === bucketId && t.paid)
     .reduce((sum, t) => sum + txnAmountEur(t, month.exchangeRate), 0);
 }
 
-/** Sum planned/actual EUR for a bucket, restricted to a given owner. */
-export function sumByBucketAndOwner(month, categories, bucket, owner, usePaidActual = true) {
-  const bucketMap = categoryBucketMap(categories);
+/** Sum planned/actual EUR within the free bucket, restricted to one owner. */
+function sumFreeByOwner(month, categories, owner, usePaidActual) {
+  const catMap = categoryMap(categories);
   return month.transactions
-    .filter(t => bucketMap[t.categoryId] === bucket && t.owner === owner)
+    .filter(t => catMap[t.categoryId]?.bucketId === FREE_BUCKET_ID && t.owner === owner)
     .reduce((sum, t) => {
-      if (usePaidActual && t.paid) return sum + txnAmountEur(t, month.exchangeRate);
-      if (!usePaidActual) return sum + txnPlannedEur(t, month.exchangeRate);
-      return sum;
+      if (usePaidActual) return t.paid ? sum + txnAmountEur(t, month.exchangeRate) : sum;
+      return sum + txnPlannedEur(t, month.exchangeRate);
     }, 0);
+}
+
+/** Sum of transactions flagged as Georgia-transfer categories (independent of their budget bucket). */
+function sumGeorgiaTransfer(month, categories) {
+  const catMap = categoryMap(categories);
+  const txns = month.transactions.filter(t => catMap[t.categoryId]?.georgiaTransfer);
+  const plannedGel = txns.filter(t => t.currency === 'GEL').reduce((s, t) => s + t.amountPlanned, 0);
+  const plannedEur = txns.reduce((s, t) => s + txnPlannedEur(t, month.exchangeRate), 0);
+  const actualEur = txns.filter(t => t.paid).reduce((s, t) => s + txnAmountEur(t, month.exchangeRate), 0);
+  return { plannedGel, plannedEur, actualEur };
 }
 
 export function totalIncome(month) {
   return (month.income?.giorgi || 0) + (month.income?.nino || 0);
 }
 
-/** Full dashboard aggregate for a month, per spec §4.3. */
+/** Full dashboard aggregate for a month, driven entirely by the user's configured buckets. */
 export function computeDashboard(month, categories, settings) {
   const T = totalIncome(month);
-  const essentialsPlanned = sumPlannedByBucket(month, categories, 'essentials');
-  const essentialsActual = sumActualByBucket(month, categories, 'essentials');
-  const georgiaPlannedEur = sumPlannedByBucket(month, categories, 'georgia');
-  const georgiaActualEur = sumActualByBucket(month, categories, 'georgia');
-  const georgiaPlannedGel = month.transactions
-    .filter(t => categoryBucketMap(categories)[t.categoryId] === 'georgia' && t.currency === 'GEL')
-    .reduce((s, t) => s + t.amountPlanned, 0);
-
-  const plannedSavings = month.plannedSavings != null
-    ? month.plannedSavings
-    : T * (settings.planPercents.savings / 100);
-
-  const freeTotal = T - essentialsPlanned - georgiaPlannedEur - plannedSavings;
-
-  const { freeGiorgi, freeNino } = settings.planPercents;
-  const freeShareDenom = (freeGiorgi + freeNino) || 1;
-  const freeGiorgiShare = freeTotal * (freeGiorgi / freeShareDenom);
-  const freeNinoShare = freeTotal * (freeNino / freeShareDenom);
-
-  const freeSpentGiorgi = sumByBucketAndOwner(month, categories, 'free', 'giorgi', true);
-  const freeSpentNino = sumByBucketAndOwner(month, categories, 'free', 'nino', true);
-
-  const allPaidActuals = ['essentials', 'georgia', 'free']
-    .reduce((sum, bucket) => sum + sumActualByBucket(month, categories, bucket), 0);
-  const actualSavings = T - allPaidActuals;
-
   const pct = (x) => T > 0 ? Math.round((x / T) * 1000) / 10 : 0;
+
+  const buckets = settings.buckets.map(b => {
+    const planned = sumPlannedByBucket(month, categories, b.id);
+    const actual = sumActualByBucket(month, categories, b.id);
+    return { ...b, planned, actual, pct: pct(planned) };
+  });
+  const bucketsPlannedTotal = buckets.reduce((s, b) => s + b.planned, 0);
+  const bucketsActualTotal = buckets.reduce((s, b) => s + b.actual, 0);
+
+  const georgia = sumGeorgiaTransfer(month, categories);
+
+  const freeTotal = T - bucketsPlannedTotal;
+  const { giorgi: freeGiorgiCfg, nino: freeNinoCfg } = settings.planFree;
+  const freeShareDenom = (freeGiorgiCfg.percent + freeNinoCfg.percent) || 1;
+  const freeGiorgiShare = freeTotal * (freeGiorgiCfg.percent / freeShareDenom);
+  const freeNinoShare = freeTotal * (freeNinoCfg.percent / freeShareDenom);
+
+  const freeSpentGiorgi = sumFreeByOwner(month, categories, 'giorgi', true);
+  const freeSpentNino = sumFreeByOwner(month, categories, 'nino', true);
+  const freeActualTotal = freeSpentGiorgi + freeSpentNino;
+
+  const actualSavings = T - bucketsActualTotal - freeActualTotal;
 
   return {
     totalIncome: T,
-    essentials: { planned: essentialsPlanned, actual: essentialsActual, pct: pct(essentialsPlanned) },
-    georgia: {
-      plannedEur: georgiaPlannedEur,
-      actualEur: georgiaActualEur,
-      plannedGel: georgiaPlannedGel,
-      pct: pct(georgiaPlannedEur)
-    },
-    savings: { planned: plannedSavings, actual: actualSavings, pct: pct(plannedSavings) },
+    buckets,
+    georgia: { ...georgia, pct: pct(georgia.plannedEur) },
+    savings: { actual: actualSavings },
     free: {
       total: freeTotal,
-      giorgi: { share: freeGiorgiShare, spent: freeSpentGiorgi, remaining: freeGiorgiShare - freeSpentGiorgi, pct: pct(freeGiorgiShare) },
-      nino: { share: freeNinoShare, spent: freeSpentNino, remaining: freeNinoShare - freeSpentNino, pct: pct(freeNinoShare) }
+      giorgi: { share: freeGiorgiShare, spent: freeSpentGiorgi, remaining: freeGiorgiShare - freeSpentGiorgi, pct: pct(freeGiorgiShare), color: freeGiorgiCfg.color },
+      nino: { share: freeNinoShare, spent: freeSpentNino, remaining: freeNinoShare - freeSpentNino, pct: pct(freeNinoShare), color: freeNinoCfg.color }
     }
   };
 }
 
-/** Plan-vs-actual rows for the 5 buckets, per spec §4.4. */
+/** Plan-vs-actual rows: one per user bucket, plus the two free-money person splits. */
 export function computePlanVsActual(month, categories, settings) {
   const T = totalIncome(month);
-  const d = computeDashboard(month, categories, settings);
   const pct = (x) => T > 0 ? (x / T) * 100 : 0;
+  const dash = computeDashboard(month, categories, settings);
 
-  const rows = [
-    { key: 'essentials', label: 'აუცილებელი', target: settings.planPercents.essentials, actual: pct(d.essentials.actual), isExpense: true },
-    { key: 'georgia', label: 'საქართველო', target: settings.planPercents.georgia, actual: pct(d.georgia.actualEur), isExpense: true },
-    { key: 'savings', label: 'დანაზოგი', target: settings.planPercents.savings, actual: pct(d.savings.actual), isExpense: false },
-    { key: 'freeGiorgi', label: 'თავისუფალი (გიორგი)', target: settings.planPercents.freeGiorgi, actual: pct(d.free.giorgi.spent), isExpense: true },
-    { key: 'freeNino', label: 'თავისუფალი (ნინო)', target: settings.planPercents.freeNino, actual: pct(d.free.nino.spent), isExpense: true }
-  ];
-
-  return rows.map(r => {
-    const delta = r.actual - r.target;
-    const ok = r.isExpense ? r.actual <= r.target : r.actual >= r.target;
-    return { ...r, delta: Math.round(delta * 10) / 10, ok };
+  const rows = dash.buckets.map(b => {
+    const actual = pct(b.actual);
+    const ok = b.goalType === 'min' ? actual >= b.percent : actual <= b.percent;
+    return { key: b.id, label: b.name, color: b.color, target: b.percent, actual, delta: Math.round((actual - b.percent) * 10) / 10, ok };
   });
+
+  const { giorgi: freeGiorgiCfg, nino: freeNinoCfg } = settings.planFree;
+  const giorgiActual = pct(dash.free.giorgi.spent);
+  const ninoActual = pct(dash.free.nino.spent);
+  rows.push({ key: 'freeGiorgi', label: 'თავისუფალი (გიორგი)', color: freeGiorgiCfg.color, target: freeGiorgiCfg.percent, actual: giorgiActual, delta: Math.round((giorgiActual - freeGiorgiCfg.percent) * 10) / 10, ok: giorgiActual <= freeGiorgiCfg.percent });
+  rows.push({ key: 'freeNino', label: 'თავისუფალი (ნინო)', color: freeNinoCfg.color, target: freeNinoCfg.percent, actual: ninoActual, delta: Math.round((ninoActual - freeNinoCfg.percent) * 10) / 10, ok: ninoActual <= freeNinoCfg.percent });
+
+  return rows;
+}
+
+/** Sum of all bucket percents + free-money percents; must equal 100 for a valid plan. */
+export function sumAllPercents(settings) {
+  const bucketSum = settings.buckets.reduce((s, b) => s + (Number(b.percent) || 0), 0);
+  return bucketSum + (Number(settings.planFree.giorgi.percent) || 0) + (Number(settings.planFree.nino.percent) || 0);
 }
 
 // ---- Number formatting (German-style: space thousands, comma decimals) ----
@@ -179,8 +185,6 @@ export function runSelfChecks() {
   assertEq('quarterly not due 2026-09', isTemplateDueInMonth(q, '2026-09'), false);
   assertEq('quarterly not due 2026-10', isTemplateDueInMonth(q, '2026-10'), false);
   assertEq('quarterly due 2026-11', isTemplateDueInMonth(q, '2026-11'), true);
-
-  // Before first due month => never due.
   assertEq('before first due', isTemplateDueInMonth(q, '2026-07'), false);
 
   // One-time only in its own month.
@@ -188,21 +192,36 @@ export function runSelfChecks() {
   assertEq('oneTime due in its month', isTemplateDueInMonth(ot, '2026-08'), true);
   assertEq('oneTime not due next month', isTemplateDueInMonth(ot, '2026-09'), false);
 
-  // Plan-vs-actual percentage math sanity: 100 income, 45 essentials actual => 45%.
-  const month = {
-    exchangeRate: 3, income: { giorgi: 100, nino: 0 }, plannedSavings: null,
-    transactions: [{ id: 't1', categoryId: 'cat_essentials', owner: 'shared', currency: 'EUR', amountPlanned: 45, amountActual: 45, paid: true }]
+  // Dashboard math with the generic buckets model.
+  const settings = {
+    buckets: [
+      { id: 'bucket_essentials', name: 'აუცილებელი', percent: 65, color: '#2563eb', goalType: 'max' },
+      { id: 'bucket_savings', name: 'დანაზოგი', percent: 25, color: '#16a34a', goalType: 'min' }
+    ],
+    planFree: { giorgi: { percent: 5, color: '#7c3aed' }, nino: { percent: 5, color: '#db2777' } }
   };
   const categories = [
-    { id: 'cat_essentials', bucket: 'essentials' },
-    { id: 'cat_georgia', bucket: 'georgia' },
-    { id: 'cat_other', bucket: 'free' }
+    { id: 'cat_essentials', bucketId: 'bucket_essentials', georgiaTransfer: false },
+    { id: 'cat_georgia', bucketId: 'bucket_essentials', georgiaTransfer: true },
+    { id: 'cat_other', bucketId: FREE_BUCKET_ID, georgiaTransfer: false }
   ];
-  const settings = { planPercents: { essentials: 45, georgia: 20, savings: 25, freeGiorgi: 5, freeNino: 5 } };
+  const month = {
+    exchangeRate: 3, income: { giorgi: 1000, nino: 0 }, plannedSavings: null,
+    transactions: [
+      { id: 't1', categoryId: 'cat_essentials', owner: 'shared', currency: 'EUR', amountPlanned: 650, amountActual: 650, paid: true },
+      { id: 't2', categoryId: 'cat_georgia', owner: 'giorgi', currency: 'GEL', amountPlanned: 300, amountActual: null, paid: false }
+    ]
+  };
+  assertEq('sumAllPercents == 100', sumAllPercents(settings), 100);
+  const dash = computeDashboard(month, categories, settings);
+  const essentialsBucket = dash.buckets.find(b => b.id === 'bucket_essentials');
+  assertClose('essentials bucket actual == 650', essentialsBucket.actual, 650, 0.01);
+  assertClose('georgia info plannedEur == 100 (300/3)', dash.georgia.plannedEur, 100, 0.01);
+  assertEq('georgia info plannedGel == 300', dash.georgia.plannedGel, 300);
   const pva = computePlanVsActual(month, categories, settings);
-  const essentialsRow = pva.find(r => r.key === 'essentials');
-  assertClose('plan-vs-actual essentials %', essentialsRow.actual, 45, 0.1);
-  assertEq('plan-vs-actual essentials ok (at target)', essentialsRow.ok, true);
+  const essentialsRow = pva.find(r => r.key === 'bucket_essentials');
+  assertClose('plan-vs-actual essentials % == 65 (650/1000)', essentialsRow.actual, 65, 0.1);
+  assertEq('plan-vs-actual essentials at target -> ok', essentialsRow.ok, true);
 
   const passed = results.filter(r => r.pass).length;
   const failed = results.filter(r => !r.pass);
@@ -211,8 +230,6 @@ export function runSelfChecks() {
   return results;
 }
 
-// Imported lazily to avoid circular import issues at module init time in some bundlers;
-// re-exported here so runSelfChecks can use it without importing monthEngine.js (kept pure/local copy).
 function isTemplateDueInMonth(tpl, monthKeyStr) {
   const [ty, tm] = tpl.firstDueDate.slice(0, 7).split('-').map(Number);
   const [my, mm] = monthKeyStr.split('-').map(Number);
@@ -224,4 +241,4 @@ function isTemplateDueInMonth(tpl, monthKeyStr) {
   return (curIdx - firstIdx) % cycle === 0;
 }
 
-export { isTemplateDueInMonth };
+export { isTemplateDueInMonth, FREE_BUCKET_ID };

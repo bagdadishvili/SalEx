@@ -1,81 +1,182 @@
-// views/settings.js — Plan percents, appearance, data (export/import), danger zone §5.5.
+// views/settings.js — Bucket CRUD, free-money split, appearance, data, sync, danger zone §5.5.
 
 import { getState, updateState, wipeState } from '../state.js';
-import { el, confirmDialog, toast } from '../ui.js';
+import { sumAllPercents, formatPercent } from '../calc.js';
+import { el, confirmDialog, toast, openModal } from '../ui.js';
 import { exportJson, importJson, exportCsv } from '../exporter.js';
 import { applyAppearance, checkBackupReminder } from '../app.js';
+import * as sync from '../sync.js';
 
-const ACCENT_PRESETS = ['#2563eb', '#16a34a', '#d97706', '#dc2626', '#7c3aed', '#db2777', '#0891b2'];
+const COLOR_PRESETS = ['#2563eb', '#16a34a', '#d97706', '#dc2626', '#7c3aed', '#db2777', '#0891b2', '#65a30d', '#ea580c', '#4f46e5', '#0d9488', '#be123c'];
 
 const CARD_LABELS = {
-  income: 'შემოსავალი', rate: 'კურსი', essentials: 'აუცილებელი ხარჯები',
-  georgia: 'საქართველო', savings: 'დანაზოგი', free: 'თავისუფალი თანხა', planVsActual: 'გეგმა vs ფაქტი'
+  income: 'შემოსავალი', rate: 'კურსი', georgia: 'საქართველოში გადასარიცხი',
+  buckets: 'ბიუჯეტის კატეგორიები', free: 'თავისუფალი თანხა', planVsActual: 'გეგმა vs ფაქტი'
 };
+
+function uid(prefix) {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function pickColor(currentColor) {
+  return new Promise((resolve) => {
+    const body = el('div', {});
+    const grid = el('div', { class: 'color-swatch-row' });
+    COLOR_PRESETS.forEach(color => {
+      const swatch = el('button', { type: 'button', class: 'color-swatch', style: `background:${color}`, 'aria-pressed': String(color === currentColor) });
+      swatch.addEventListener('click', () => { resolve(color); close(); });
+      grid.appendChild(swatch);
+    });
+    body.appendChild(grid);
+    const { close } = openModal(body, { title: 'აირჩიე ფერი', onClose: () => resolve(null) });
+  });
+}
 
 export function renderSettings(root) {
   const container = el('div', { class: 'settings-view' });
   root.appendChild(container);
 
-  container.appendChild(renderPlanPercents());
+  container.appendChild(renderBuckets());
   container.appendChild(renderAppearance());
+  container.appendChild(renderSync());
   container.appendChild(renderDataSection());
   container.appendChild(renderDangerZone());
 }
 
-function renderPlanPercents() {
-  const state = getState();
+// ---------------- Buckets (budget categories) + free-money split ----------------
+
+function renderBuckets() {
   const card = el('div', { class: 'card' });
-  card.appendChild(el('div', { class: 'card__title', text: 'გეგმის პროცენტები' }));
+  card.appendChild(el('div', { class: 'card__title', text: 'ბიუჯეტის კატეგორიები და პროცენტები' }));
+  card.appendChild(el('p', { class: 'card__sub', text: 'დაამატე, გადაარქვი ან წაშალე ძირითადი ბიუჯეტის კატეგორიები (მაგ. აუცილებელი, დანაზოგი). თითოეულს აქვს სამიზნე პროცენტი და ფერი.' }));
 
-  const fields = {};
-  const labels = { essentials: 'აუცილებელი', georgia: 'საქართველო', savings: 'დანაზოგი', freeGiorgi: 'თავისუფალი (გიორგი)', freeNino: 'თავისუფალი (ნინო)' };
-  const row = el('div', { class: 'field-row' });
+  const list = el('div', { class: 'order-list', style: 'margin-top:8px' });
+  const sumEl = el('div', { class: 'sum-indicator', style: 'margin-top:8px' });
+  const addBtn = el('button', { class: 'btn btn--secondary btn--sm', text: '+ ახალი კატეგორია' });
+  const saveBtn = el('button', { class: 'btn btn--primary', text: 'პროცენტების შენახვა' });
 
-  const sumEl = el('div', { class: 'sum-indicator' });
-
-  function computeSum() {
-    return Object.values(fields).reduce((s, input) => s + (Number(input.value) || 0), 0);
-  }
   function updateSum() {
-    const sum = computeSum();
-    sumEl.textContent = `ჯამი: ${sum}%`;
+    const state = getState();
+    const sum = sumAllPercents(state.settings);
+    sumEl.textContent = `ჯამი: ${sum}% (უნდა იყოს 100%)`;
     sumEl.className = 'sum-indicator ' + (sum === 100 ? 'sum-indicator--ok' : 'sum-indicator--bad');
     saveBtn.disabled = sum !== 100;
   }
 
-  Object.keys(labels).forEach(key => {
-    const input = el('input', { type: 'number', min: '0', max: '100', value: String(state.settings.planPercents[key]) });
-    input.addEventListener('input', updateSum);
-    fields[key] = input;
-    row.appendChild(el('div', { class: 'field' }, [el('label', { text: labels[key] }), input]));
-  });
+  function draw() {
+    const state = getState();
+    list.innerHTML = '';
 
-  card.appendChild(row);
-  card.appendChild(sumEl);
+    state.settings.buckets.forEach((bucket, idx) => {
+      const row = el('div', { class: 'order-list__item', style: 'flex-wrap:wrap;gap:8px' });
 
-  const saveBtn = el('button', { class: 'btn btn--primary', text: 'შენახვა' });
-  card.appendChild(el('div', { class: 'btn-row' }, [saveBtn]));
+      const nameInput = el('input', { type: 'text', value: bucket.name, style: 'max-width:140px;min-height:36px' });
+      nameInput.addEventListener('change', () => {
+        updateState(draft => { draft.settings.buckets[idx].name = nameInput.value.trim() || bucket.name; return draft; });
+        toast('შენახულია ✓');
+      });
 
-  saveBtn.addEventListener('click', () => {
-    const sum = computeSum();
-    if (sum !== 100) { toast('პროცენტების ჯამი უნდა იყოს 100%', 'error'); return; }
+      const percentInput = el('input', { type: 'number', min: '0', max: '100', value: String(bucket.percent), style: 'width:70px;min-height:36px' });
+      percentInput.addEventListener('input', updateSum);
+      percentInput.addEventListener('change', () => {
+        updateState(draft => { draft.settings.buckets[idx].percent = Number(percentInput.value) || 0; return draft; });
+        updateSum();
+      });
+
+      const goalSelect = el('select', { style: 'min-height:36px' }, [
+        el('option', { value: 'max', text: 'მაქს. (ხარჯი)' }),
+        el('option', { value: 'min', text: 'მინ. (დანაზოგი)' })
+      ]);
+      goalSelect.value = bucket.goalType || 'max';
+      goalSelect.addEventListener('change', () => {
+        updateState(draft => { draft.settings.buckets[idx].goalType = goalSelect.value; return draft; });
+        toast('შენახულია ✓');
+      });
+
+      const colorBtn = el('button', { type: 'button', class: 'color-swatch', style: `background:${bucket.color};width:28px;height:28px` });
+      colorBtn.addEventListener('click', async () => {
+        const color = await pickColor(bucket.color);
+        if (!color) return;
+        updateState(draft => { draft.settings.buckets[idx].color = color; return draft; });
+        toast('ფერი შენახულია ✓');
+        draw();
+      });
+
+      const deleteBtn = el('button', { class: 'icon-btn', 'aria-label': 'წაშლა', text: '🗑' });
+      deleteBtn.addEventListener('click', async () => {
+        const inUse = state.categories.some(c => c.bucketId === bucket.id);
+        if (inUse) { toast('ჯერ გადაანაწილეთ ამ კატეგორიაზე მიბმული კატეგორიები', 'error'); return; }
+        if (state.settings.buckets.length <= 1) { toast('უნდა დარჩეს მინიმუმ ერთი კატეგორია', 'error'); return; }
+        const ok = await confirmDialog(`წავშალო „${bucket.name}“?`, { danger: true, confirmLabel: 'წაშლა' });
+        if (!ok) return;
+        updateState(draft => { draft.settings.buckets = draft.settings.buckets.filter(b => b.id !== bucket.id); return draft; });
+        toast('წაიშალა');
+        draw();
+        updateSum();
+      });
+
+      row.append(nameInput, percentInput, el('span', { text: '%' }), goalSelect, colorBtn, deleteBtn);
+      list.appendChild(row);
+    });
+
+    // Free-money split (fixed pair, rename/recolor/percent editable, not deletable/addable).
+    ['giorgi', 'nino'].forEach(owner => {
+      const cfg = state.settings.planFree[owner];
+      const label = owner === 'giorgi' ? 'თავისუფალი (გიორგი)' : 'თავისუფალი (ნინო)';
+      const row = el('div', { class: 'order-list__item', style: 'flex-wrap:wrap;gap:8px' });
+      row.appendChild(el('span', { text: label, style: 'min-width:140px;font-weight:600' }));
+      const percentInput = el('input', { type: 'number', min: '0', max: '100', value: String(cfg.percent), style: 'width:70px;min-height:36px' });
+      percentInput.addEventListener('input', updateSum);
+      percentInput.addEventListener('change', () => {
+        updateState(draft => { draft.settings.planFree[owner].percent = Number(percentInput.value) || 0; return draft; });
+        updateSum();
+      });
+      const colorBtn = el('button', { type: 'button', class: 'color-swatch', style: `background:${cfg.color};width:28px;height:28px` });
+      colorBtn.addEventListener('click', async () => {
+        const color = await pickColor(cfg.color);
+        if (!color) return;
+        updateState(draft => { draft.settings.planFree[owner].color = color; return draft; });
+        toast('ფერი შენახულია ✓');
+        draw();
+      });
+      row.append(percentInput, el('span', { text: '%' }), colorBtn);
+      list.appendChild(row);
+    });
+
+    updateSum();
+  }
+
+  addBtn.addEventListener('click', () => {
     updateState(draft => {
-      Object.keys(labels).forEach(key => { draft.settings.planPercents[key] = Number(fields[key].value); });
+      draft.settings.buckets.push({
+        id: uid('bucket'), name: 'ახალი კატეგორია', percent: 0,
+        color: COLOR_PRESETS[draft.settings.buckets.length % COLOR_PRESETS.length], goalType: 'max'
+      });
       return draft;
     });
+    draw();
+  });
+
+  saveBtn.addEventListener('click', () => {
+    const state = getState();
+    if (sumAllPercents(state.settings) !== 100) { toast('პროცენტების ჯამი უნდა იყოს 100%', 'error'); return; }
     toast('შენახულია ✓');
   });
 
-  updateSum();
+  draw();
+  card.appendChild(list);
+  card.appendChild(sumEl);
+  card.appendChild(el('div', { class: 'btn-row' }, [addBtn, saveBtn]));
   return card;
 }
+
+// ---------------- Appearance ----------------
 
 function renderAppearance() {
   const state = getState();
   const card = el('div', { class: 'card' });
   card.appendChild(el('div', { class: 'card__title', text: 'გაფორმება' }));
 
-  // Theme
   const themeRow = el('div', { class: 'field' }, [el('label', { text: 'თემა' })]);
   const themeSelect = el('select', {}, [el('option', { value: 'light', text: 'ღია' }), el('option', { value: 'dark', text: 'მუქი' })]);
   themeSelect.value = state.settings.theme;
@@ -87,10 +188,9 @@ function renderAppearance() {
   themeRow.appendChild(themeSelect);
   card.appendChild(themeRow);
 
-  // Accent color
-  card.appendChild(el('label', { text: 'აქცენტის ფერი', style: 'font-size:0.85rem;color:var(--text-muted);display:block;margin-bottom:6px' }));
+  card.appendChild(el('label', { text: 'აქცენტის ფერი (ზოგადი UI)', style: 'font-size:0.85rem;color:var(--text-muted);display:block;margin-bottom:6px' }));
   const swatchRow = el('div', { class: 'color-swatch-row' });
-  ACCENT_PRESETS.forEach(color => {
+  COLOR_PRESETS.slice(0, 7).forEach(color => {
     const swatch = el('button', { class: 'color-swatch', style: `background:${color}`, 'aria-pressed': String(state.settings.accentColor === color), 'aria-label': color });
     swatch.addEventListener('click', () => {
       updateState(draft => { draft.settings.accentColor = color; return draft; });
@@ -103,7 +203,6 @@ function renderAppearance() {
   });
   card.appendChild(swatchRow);
 
-  // Font size
   const fontRow = el('div', { class: 'field', style: 'margin-top:12px' }, [el('label', { text: 'ფონტის ზომა' })]);
   const fontSelect = el('select', {}, [
     el('option', { value: 'small', text: 'პატარა' }),
@@ -119,8 +218,7 @@ function renderAppearance() {
   fontRow.appendChild(fontSelect);
   card.appendChild(fontRow);
 
-  // Dashboard card order
-  card.appendChild(el('label', { text: 'დეშბორდის ბარათების თანმიმდევრობა', style: 'font-size:0.85rem;color:var(--text-muted);display:block;margin:16px 0 6px' }));
+  card.appendChild(el('label', { text: 'დეშბორდის ბლოკების თანმიმდევრობა', style: 'font-size:0.85rem;color:var(--text-muted);display:block;margin:16px 0 6px' }));
   const orderList = el('div', { class: 'order-list' });
   function drawOrder() {
     const s = getState();
@@ -128,9 +226,7 @@ function renderAppearance() {
     s.settings.dashboardCardOrder.forEach((key, idx) => {
       const item = el('div', { class: 'order-list__item' }, [
         el('span', { text: CARD_LABELS[key] || key }),
-        el('div', { class: 'order-list__buttons' }, [
-          upBtn(idx), downBtn(idx, s.settings.dashboardCardOrder.length)
-        ])
+        el('div', { class: 'order-list__buttons' }, [upBtn(idx), downBtn(idx, s.settings.dashboardCardOrder.length)])
       ]);
       orderList.appendChild(item);
     });
@@ -166,6 +262,79 @@ function renderAppearance() {
 
   return card;
 }
+
+// ---------------- Cross-device sync ----------------
+
+function renderSync() {
+  const card = el('div', { class: 'card' });
+  card.appendChild(el('div', { class: 'card__title', text: 'სინქრონიზაცია მოწყობილობებს შორის' }));
+  card.appendChild(el('p', { class: 'card__sub', text: 'დააკავშირე კომპიუტერი და სმარტფონი GitHub-ის პირადი Gist-ის საშუალებით — ცვლილება ერთგან ავტომატურად აისახება მეორეზეც.' }));
+
+  const cfg = sync.getSyncConfig();
+
+  const tokenInput = el('input', { type: 'password', placeholder: 'GitHub token (ghp_...)', value: cfg.token || '', autocomplete: 'off' });
+  const gistIdInput = el('input', { type: 'text', placeholder: 'Gist ID (მეორე მოწყობილობიდან დააკოპირე)', value: cfg.gistId || '' });
+
+  const statusEl = el('div', { class: 'card__sub', style: 'margin-top:8px' });
+  function refreshStatus() {
+    const s = sync.getSyncConfig();
+    if (!s.token) { statusEl.textContent = 'სინქრონიზაცია გამორთულია — ჩაწერე token.'; return; }
+    if (!s.gistId) { statusEl.textContent = 'token შენახულია. დააჭირე „დაკავშირებას“ ახალი Gist-ის შესაქმნელად, ან ჩაწერე არსებული Gist ID.'; return; }
+    statusEl.textContent = s.lastSyncedAt
+      ? `დაკავშირებულია. ბოლო სინქრონიზაცია: ${new Date(s.lastSyncedAt).toLocaleString('ka-GE')}`
+      : 'დაკავშირებულია. სინქრონიზაცია ჯერ არ მომხდარა.';
+  }
+  refreshStatus();
+
+  const connectBtn = el('button', { class: 'btn btn--primary', text: 'დაკავშირება / ახალი Gist-ის შექმნა' });
+  connectBtn.addEventListener('click', async () => {
+    const token = tokenInput.value.trim();
+    if (!token) { toast('ჩაწერე GitHub token', 'error'); return; }
+    sync.saveSyncConfig({ token, gistId: gistIdInput.value.trim() || null });
+    connectBtn.disabled = true;
+    connectBtn.textContent = 'დაკავშირება...';
+    try {
+      const gistId = await sync.connect();
+      gistIdInput.value = gistId;
+      toast('დაკავშირებულია ✓ — Gist ID დააკოპირე მეორე მოწყობილობაზეც', 'ok');
+    } catch (e) {
+      toast('შეცდომა: ' + e.message, 'error');
+    }
+    connectBtn.disabled = false;
+    connectBtn.textContent = 'დაკავშირება / ახალი Gist-ის შექმნა';
+    refreshStatus();
+  });
+
+  const pullBtn = el('button', { class: 'btn btn--secondary', text: 'ახლავე მოტანა' });
+  pullBtn.addEventListener('click', async () => {
+    try {
+      const pulled = await sync.pullNow();
+      toast(pulled ? 'მონაცემები განახლდა ✓' : 'უკვე განახლებულია');
+      if (pulled) location.reload();
+    } catch (e) {
+      toast('შეცდომა: ' + e.message, 'error');
+    }
+    refreshStatus();
+  });
+
+  const disconnectBtn = el('button', { class: 'btn btn--ghost', text: 'გათიშვა' });
+  disconnectBtn.addEventListener('click', () => {
+    sync.saveSyncConfig({ token: '', gistId: null });
+    tokenInput.value = '';
+    gistIdInput.value = '';
+    toast('სინქრონიზაცია გათიშულია');
+    refreshStatus();
+  });
+
+  card.appendChild(el('div', { class: 'field' }, [el('label', { text: 'GitHub Personal Access Token (gist scope)' }), tokenInput]));
+  card.appendChild(el('div', { class: 'field' }, [el('label', { text: 'Gist ID' }), gistIdInput]));
+  card.appendChild(statusEl);
+  card.appendChild(el('div', { class: 'btn-row' }, [connectBtn, pullBtn, disconnectBtn]));
+
+  return card;
+}
+
+// ---------------- Data (export/import) ----------------
 
 function renderDataSection() {
   const state = getState();

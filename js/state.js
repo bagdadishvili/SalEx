@@ -2,8 +2,9 @@
 // Single source of truth. All mutations go through updateState()/saveState().
 
 const STORAGE_KEY = 'familyBudget.v1';
-const CURRENT_VERSION = 1;
+const CURRENT_VERSION = 2;
 const SAVE_DEBOUNCE_MS = 300;
+const FREE_BUCKET_ID = 'free';
 
 let saveTimer = null;
 let state = null;
@@ -28,24 +29,26 @@ function seedState() {
   const thisMonth = monthKey();
   return {
     version: CURRENT_VERSION,
+    updatedAt: new Date().toISOString(),
     settings: {
       theme: 'light',
       accentColor: '#2563eb',
       fontScale: 'medium',
-      dashboardCardOrder: ['income', 'rate', 'essentials', 'georgia', 'savings', 'free', 'planVsActual'],
-      planPercents: {
-        essentials: 45,
-        georgia: 20,
-        savings: 25,
-        freeGiorgi: 5,
-        freeNino: 5
+      dashboardCardOrder: ['income', 'rate', 'georgia', 'buckets', 'free', 'planVsActual'],
+      buckets: [
+        { id: 'bucket_essentials', name: 'აუცილებელი', percent: 65, color: '#2563eb', goalType: 'max' },
+        { id: 'bucket_savings', name: 'დანაზოგი', percent: 25, color: '#16a34a', goalType: 'min' }
+      ],
+      planFree: {
+        giorgi: { percent: 5, color: '#7c3aed' },
+        nino: { percent: 5, color: '#db2777' }
       },
       lastBackupAt: null
     },
     categories: [
-      { id: 'cat_essentials', name: 'აუცილებელი ხარჯი', bucket: 'essentials', builtin: true },
-      { id: 'cat_georgia', name: 'საქართველოში გადასარიცხი', bucket: 'georgia', builtin: true },
-      { id: 'cat_other', name: 'სხვა', bucket: 'free', builtin: true }
+      { id: 'cat_essentials', name: 'აუცილებელი ხარჯი', bucketId: 'bucket_essentials', georgiaTransfer: false },
+      { id: 'cat_georgia', name: 'საქართველოში გადასარიცხი', bucketId: 'bucket_essentials', georgiaTransfer: true },
+      { id: 'cat_other', name: 'სხვა', bucketId: FREE_BUCKET_ID, georgiaTransfer: false }
     ],
     templates: [],
     months: {
@@ -60,14 +63,48 @@ function seedState() {
   };
 }
 
+function migrateV1ToV2(raw) {
+  const oldPercents = (raw.settings && raw.settings.planPercents) || { essentials: 45, georgia: 20, savings: 25, freeGiorgi: 5, freeNino: 5 };
+  const buckets = [
+    { id: 'bucket_essentials', name: 'აუცილებელი', percent: (oldPercents.essentials || 0) + (oldPercents.georgia || 0), color: '#2563eb', goalType: 'max' },
+    { id: 'bucket_savings', name: 'დანაზოგი', percent: oldPercents.savings || 0, color: '#16a34a', goalType: 'min' }
+  ];
+  const planFree = {
+    giorgi: { percent: oldPercents.freeGiorgi || 0, color: '#7c3aed' },
+    nino: { percent: oldPercents.freeNino || 0, color: '#db2777' }
+  };
+  const bucketMap = { essentials: 'bucket_essentials', georgia: 'bucket_essentials', savings: 'bucket_savings', free: FREE_BUCKET_ID };
+
+  raw.categories = (raw.categories || []).map(cat => ({
+    id: cat.id,
+    name: cat.name,
+    bucketId: bucketMap[cat.bucket] || FREE_BUCKET_ID,
+    georgiaTransfer: cat.bucket === 'georgia'
+  }));
+
+  raw.settings = raw.settings || {};
+  raw.settings.buckets = buckets;
+  raw.settings.planFree = planFree;
+  raw.settings.dashboardCardOrder = ['income', 'rate', 'georgia', 'buckets', 'free', 'planVsActual'];
+  delete raw.settings.planPercents;
+
+  raw.version = 2;
+  return raw;
+}
+
 function migrate(raw) {
-  // Future migrations go here, keyed by raw.version.
   if (!raw || typeof raw !== 'object') return seedState();
-  if (!raw.version) raw.version = CURRENT_VERSION;
+  if (!raw.version) raw.version = 1;
+
+  if (raw.version < 2) {
+    raw = migrateV1ToV2(raw);
+  }
+
   // Ensure required top-level shape even if partially corrupted.
   const seed = seedState();
   raw.settings = raw.settings || seed.settings;
-  raw.settings.planPercents = raw.settings.planPercents || seed.settings.planPercents;
+  raw.settings.buckets = Array.isArray(raw.settings.buckets) && raw.settings.buckets.length ? raw.settings.buckets : seed.settings.buckets;
+  raw.settings.planFree = raw.settings.planFree || seed.settings.planFree;
   raw.settings.dashboardCardOrder = raw.settings.dashboardCardOrder || seed.settings.dashboardCardOrder;
   raw.settings.theme = raw.settings.theme || 'light';
   raw.settings.accentColor = raw.settings.accentColor || '#2563eb';
@@ -76,6 +113,8 @@ function migrate(raw) {
   raw.categories = Array.isArray(raw.categories) ? raw.categories : seed.categories;
   raw.templates = Array.isArray(raw.templates) ? raw.templates : [];
   raw.months = raw.months && typeof raw.months === 'object' ? raw.months : {};
+  if (!raw.updatedAt) raw.updatedAt = new Date().toISOString();
+  raw.version = CURRENT_VERSION;
   return raw;
 }
 
@@ -125,6 +164,7 @@ export function ensureMonth(key) {
 export function updateState(mutator) {
   const draft = deepClone(state);
   const result = mutator(draft) || draft;
+  result.updatedAt = new Date().toISOString();
   state = result;
   saveState();
   notify();
@@ -181,4 +221,4 @@ export function wipeState() {
   return state;
 }
 
-export { todayISO, STORAGE_KEY };
+export { todayISO, STORAGE_KEY, FREE_BUCKET_ID };
