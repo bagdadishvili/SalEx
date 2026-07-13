@@ -1,35 +1,21 @@
 // views/settings.js — Bucket CRUD, free-money split, appearance, data, sync, danger zone §5.5.
 
 import { getState, updateState, wipeState } from '../state.js';
-import { sumAllPercents, formatPercent } from '../calc.js';
-import { el, confirmDialog, toast, openModal } from '../ui.js';
+import { sumAllPercents, effectiveCardOrder } from '../calc.js';
+import { el, confirmDialog, toast } from '../ui.js';
 import { exportJson, importJson, exportCsv, importCsv } from '../exporter.js';
 import { applyAppearance, checkBackupReminder } from '../app.js';
+import { pickColor, COLOR_PRESETS } from '../components.js';
 import * as sync from '../sync.js';
-
-const COLOR_PRESETS = ['#2563eb', '#16a34a', '#d97706', '#dc2626', '#7c3aed', '#db2777', '#0891b2', '#65a30d', '#ea580c', '#4f46e5', '#0d9488', '#be123c'];
 
 const CARD_LABELS = {
   summary: 'თვის მიმოხილვა', income: 'შემოსავალი', rate: 'კურსი', georgia: 'საქართველოში გადასარიცხი',
-  buckets: 'ბიუჯეტის კატეგორიები', free: 'თავისუფალი თანხა', planVsActual: 'გეგმა vs ფაქტი'
+  free: 'თავისუფალი თანხა', planVsActual: 'დაგეგმილი vs რეალური'
 };
 
-function uid(prefix) {
-  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function pickColor(currentColor) {
-  return new Promise((resolve) => {
-    const body = el('div', {});
-    const grid = el('div', { class: 'color-swatch-row' });
-    COLOR_PRESETS.forEach(color => {
-      const swatch = el('button', { type: 'button', class: 'color-swatch', style: `background:${color}`, 'aria-pressed': String(color === currentColor) });
-      swatch.addEventListener('click', () => { resolve(color); close(); });
-      grid.appendChild(swatch);
-    });
-    body.appendChild(grid);
-    const { close } = openModal(body, { title: 'აირჩიე ფერი', onClose: () => resolve(null) });
-  });
+function cardLabel(state, key) {
+  if (CARD_LABELS[key]) return CARD_LABELS[key];
+  return state.categories.find(c => c.id === key)?.name || key;
 }
 
 export function renderSettings(root) {
@@ -43,20 +29,19 @@ export function renderSettings(root) {
   container.appendChild(renderDangerZone());
 }
 
-// ---------------- Buckets (budget categories) + free-money split ----------------
+// ---------------- Percent plan (over unified categories) + free-money split ----------------
 
 function renderBuckets() {
   const card = el('div', { class: 'card' });
-  card.appendChild(el('div', { class: 'card__title', text: 'ბიუჯეტის კატეგორიები და პროცენტები' }));
-  card.appendChild(el('p', { class: 'card__sub', text: 'დაამატე, გადაარქვი ან წაშალე ძირითადი ბიუჯეტის კატეგორიები (მაგ. აუცილებელი, დანაზოგი). თითოეულს აქვს სამიზნე პროცენტი და ფერი.' }));
+  card.appendChild(el('div', { class: 'card__title', text: 'პროცენტული გეგმა' }));
+  card.appendChild(el('p', { class: 'card__sub', text: 'თითო ძირითად კატეგორიას აქვს სამიზნე პროცენტი შემოსავლიდან. კატეგორიების დამატება, გადარქმევა, ფერი და წაშლა — „კატეგორიები" გვერდზეა.' }));
 
   const list = el('div', { class: 'order-list', style: 'margin-top:8px' });
   const sumEl = el('div', { class: 'sum-indicator', style: 'margin-top:8px' });
-  const addBtn = el('button', { class: 'btn btn--secondary btn--sm', text: '+ ახალი კატეგორია' });
 
   function updateSum() {
     const state = getState();
-    const sum = sumAllPercents(state.settings);
+    const sum = sumAllPercents(state.settings, state.categories);
     sumEl.textContent = sum === 100
       ? `ჯამი: ${sum}% ✓ — ყველაფერი ავტომატურად ინახება`
       : `ჯამი: ${sum}% (უნდა იყოს 100%)`;
@@ -67,70 +52,29 @@ function renderBuckets() {
     const state = getState();
     list.innerHTML = '';
 
-    state.settings.buckets.forEach((bucket, idx) => {
+    state.categories.filter(c => !c.parentId).forEach(cat => {
       const row = el('div', { class: 'order-list__item', style: 'flex-wrap:wrap;gap:8px' });
-
-      const nameInput = el('input', { type: 'text', value: bucket.name, style: 'max-width:140px;min-height:36px' });
-      nameInput.addEventListener('change', () => {
-        updateState(draft => { draft.settings.buckets[idx].name = nameInput.value.trim() || bucket.name; return draft; });
-        toast('შენახულია ✓');
-      });
-
-      const percentInput = el('input', { type: 'number', min: '0', max: '100', value: String(bucket.percent), style: 'width:70px;min-height:36px' });
+      row.appendChild(el('span', { class: 'color-dot', style: `background:${cat.color}` }));
+      row.appendChild(el('span', { text: cat.name, style: 'flex:1;min-width:120px;font-weight:600' }));
+      const percentInput = el('input', { type: 'number', min: '0', max: '100', value: String(cat.percent), style: 'width:70px;min-height:36px' });
       percentInput.addEventListener('input', () => {
-        // Commit immediately so the live sum indicator reflects what's typed.
-        updateState(draft => { draft.settings.buckets[idx].percent = Number(percentInput.value) || 0; return draft; });
+        updateState(draft => {
+          const c = draft.categories.find(x => x.id === cat.id);
+          if (c) c.percent = Number(percentInput.value) || 0;
+          return draft;
+        });
         updateSum();
       });
-
-      const goalSelect = el('select', { style: 'min-height:36px' }, [
-        el('option', { value: 'max', text: 'მაქს. (ხარჯი)' }),
-        el('option', { value: 'min', text: 'მინ. (დანაზოგი)' })
-      ]);
-      goalSelect.value = bucket.goalType || 'max';
-      goalSelect.addEventListener('change', () => {
-        updateState(draft => { draft.settings.buckets[idx].goalType = goalSelect.value; return draft; });
-        toast('შენახულია ✓');
-      });
-
-      const colorBtn = el('button', { type: 'button', class: 'color-swatch', style: `background:${bucket.color};width:28px;height:28px` });
-      colorBtn.addEventListener('click', async () => {
-        const color = await pickColor(bucket.color);
-        if (!color) return;
-        updateState(draft => { draft.settings.buckets[idx].color = color; return draft; });
-        toast('ფერი შენახულია ✓');
-        draw();
-      });
-
-      const deleteBtn = el('button', { class: 'icon-btn', 'aria-label': 'წაშლა', text: '🗑' });
-      deleteBtn.addEventListener('click', async () => {
-        const inUse = state.categories.some(c => c.bucketId === bucket.id);
-        if (inUse) { toast('ჯერ გადაანაწილეთ ამ კატეგორიაზე მიბმული კატეგორიები', 'error'); return; }
-        if (state.settings.buckets.length <= 1) { toast('უნდა დარჩეს მინიმუმ ერთი კატეგორია', 'error'); return; }
-        const ok = await confirmDialog(`წავშალო „${bucket.name}“?`, { danger: true, confirmLabel: 'წაშლა' });
-        if (!ok) return;
-        updateState(draft => { draft.settings.buckets = draft.settings.buckets.filter(b => b.id !== bucket.id); return draft; });
-        toast('წაიშალა');
-        draw();
-        updateSum();
-      });
-
-      row.append(nameInput, percentInput, el('span', { text: '%' }), goalSelect, colorBtn, deleteBtn);
+      row.append(percentInput, el('span', { text: '%' }));
       list.appendChild(row);
     });
 
-    // Free-money split (fixed pair, rename/recolor/percent editable, not deletable/addable).
+    // Free-money split (fixed pair, percent + color editable).
     ['giorgi', 'nino'].forEach(owner => {
       const cfg = state.settings.planFree[owner];
       const label = owner === 'giorgi' ? 'თავისუფალი (გიორგი)' : 'თავისუფალი (ნინო)';
       const row = el('div', { class: 'order-list__item', style: 'flex-wrap:wrap;gap:8px' });
-      row.appendChild(el('span', { text: label, style: 'min-width:140px;font-weight:600' }));
-      const percentInput = el('input', { type: 'number', min: '0', max: '100', value: String(cfg.percent), style: 'width:70px;min-height:36px' });
-      percentInput.addEventListener('input', () => {
-        updateState(draft => { draft.settings.planFree[owner].percent = Number(percentInput.value) || 0; return draft; });
-        updateSum();
-      });
-      const colorBtn = el('button', { type: 'button', class: 'color-swatch', style: `background:${cfg.color};width:28px;height:28px` });
+      const colorBtn = el('button', { type: 'button', class: 'color-swatch', style: `background:${cfg.color};width:24px;height:24px` });
       colorBtn.addEventListener('click', async () => {
         const color = await pickColor(cfg.color);
         if (!color) return;
@@ -138,33 +82,23 @@ function renderBuckets() {
         toast('ფერი შენახულია ✓');
         draw();
       });
-      row.append(percentInput, el('span', { text: '%' }), colorBtn);
+      row.appendChild(colorBtn);
+      row.appendChild(el('span', { text: label, style: 'flex:1;min-width:120px;font-weight:600' }));
+      const percentInput = el('input', { type: 'number', min: '0', max: '100', value: String(cfg.percent), style: 'width:70px;min-height:36px' });
+      percentInput.addEventListener('input', () => {
+        updateState(draft => { draft.settings.planFree[owner].percent = Number(percentInput.value) || 0; return draft; });
+        updateSum();
+      });
+      row.append(percentInput, el('span', { text: '%' }));
       list.appendChild(row);
     });
 
     updateSum();
   }
 
-  addBtn.addEventListener('click', () => {
-    updateState(draft => {
-      draft.settings.buckets.push({
-        id: uid('bucket'), name: 'ახალი კატეგორია', percent: 0,
-        color: COLOR_PRESETS[draft.settings.buckets.length % COLOR_PRESETS.length], goalType: 'max'
-      });
-      return draft;
-    });
-    draw();
-  });
-
   draw();
   card.appendChild(list);
   card.appendChild(sumEl);
-  card.appendChild(el('p', {
-    class: 'card__sub',
-    style: 'margin-top:8px',
-    text: 'რას ნიშნავს „მაქს." და „მინ.": ეს განსაზღვრავს, როგორ შეფასდეს კატეგორია „გეგმა vs ფაქტი" ბლოკში. მაქს. (ხარჯი) — მიზანი შესრულებულია (მწვანე), თუ პროცენტზე მეტს არ ხარჯავ. მინ. (დანაზოგი) — მიზანი შესრულებულია, თუ მინიმუმ ამ პროცენტს გადადებ. სხვა არაფერზე არ მოქმედებს.'
-  }));
-  card.appendChild(el('div', { class: 'btn-row' }, [addBtn]));
   return card;
 }
 
@@ -218,42 +152,32 @@ function renderAppearance() {
 
   card.appendChild(el('label', { text: 'დეშბორდის ბლოკების თანმიმდევრობა', style: 'font-size:0.85rem;color:var(--text-muted);display:block;margin:16px 0 6px' }));
   const orderList = el('div', { class: 'order-list' });
+  function moveCard(idx, delta) {
+    updateState(draft => {
+      // Work on the effective order (includes every category card), then store it.
+      const order = effectiveCardOrder(draft.settings, draft.categories);
+      [order[idx + delta], order[idx]] = [order[idx], order[idx + delta]];
+      draft.settings.dashboardCardOrder = order;
+      return draft;
+    });
+    drawOrder();
+  }
   function drawOrder() {
     const s = getState();
+    const order = effectiveCardOrder(s.settings, s.categories);
     orderList.innerHTML = '';
-    s.settings.dashboardCardOrder.forEach((key, idx) => {
-      const item = el('div', { class: 'order-list__item' }, [
-        el('span', { text: CARD_LABELS[key] || key }),
-        el('div', { class: 'order-list__buttons' }, [upBtn(idx), downBtn(idx, s.settings.dashboardCardOrder.length)])
-      ]);
-      orderList.appendChild(item);
+    order.forEach((key, idx) => {
+      const up = el('button', { class: 'icon-btn', 'aria-label': 'ზემოთ', text: '▲' });
+      if (idx === 0) up.disabled = true;
+      up.addEventListener('click', () => moveCard(idx, -1));
+      const down = el('button', { class: 'icon-btn', 'aria-label': 'ქვემოთ', text: '▼' });
+      if (idx === order.length - 1) down.disabled = true;
+      down.addEventListener('click', () => moveCard(idx, 1));
+      orderList.appendChild(el('div', { class: 'order-list__item' }, [
+        el('span', { text: cardLabel(s, key) }),
+        el('div', { class: 'order-list__buttons' }, [up, down])
+      ]));
     });
-  }
-  function upBtn(idx) {
-    const btn = el('button', { class: 'icon-btn', 'aria-label': 'ზემოთ', text: '▲' });
-    if (idx === 0) btn.disabled = true;
-    btn.addEventListener('click', () => {
-      updateState(draft => {
-        const arr = draft.settings.dashboardCardOrder;
-        [arr[idx - 1], arr[idx]] = [arr[idx], arr[idx - 1]];
-        return draft;
-      });
-      drawOrder();
-    });
-    return btn;
-  }
-  function downBtn(idx, len) {
-    const btn = el('button', { class: 'icon-btn', 'aria-label': 'ქვემოთ', text: '▼' });
-    if (idx === len - 1) btn.disabled = true;
-    btn.addEventListener('click', () => {
-      updateState(draft => {
-        const arr = draft.settings.dashboardCardOrder;
-        [arr[idx + 1], arr[idx]] = [arr[idx], arr[idx + 1]];
-        return draft;
-      });
-      drawOrder();
-    });
-    return btn;
   }
   drawOrder();
   card.appendChild(orderList);

@@ -1,17 +1,18 @@
 // views/templates.js — Templates CRUD per master-prompt §5.3.
 
 import { getState, updateState, FREE_BUCKET_ID } from '../state.js';
-import { isTemplateDueInMonth, gelToEur, formatMoney, parseAmountInput } from '../calc.js';
+import { isTemplateDueInMonth, resolveTopCategory, gelToEur, formatMoney, parseAmountInput } from '../calc.js';
 import { el, openModal, confirmDialog, toast, formatDate } from '../ui.js';
 import { monthKey } from '../state.js';
 import { getSelectedMonth, setSelectedMonth, monthLabel } from '../monthNav.js';
 import { navigate } from '../app.js';
-import { bucketChip } from '../components.js';
+import { bucketChip, freePseudoCategory } from '../components.js';
 
 function bucketOfCategory(state, category) {
   if (!category) return null;
-  if (category.bucketId === FREE_BUCKET_ID) return { id: FREE_BUCKET_ID, name: 'თავისუფალი ხარჯვა', color: '#94a3b8' };
-  return state.settings.buckets.find(b => b.id === category.bucketId) || null;
+  const top = resolveTopCategory(state.categories, category.id);
+  if (!top) return null;
+  return top.parentId === FREE_BUCKET_ID ? freePseudoCategory() : top;
 }
 
 const CYCLE_OPTIONS = [

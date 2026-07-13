@@ -1,6 +1,6 @@
 // components.js — small shared UI building blocks reused across views.
 
-import { el } from './ui.js';
+import { el, openModal } from './ui.js';
 import { getSelectedMonth, setSelectedMonth, shiftSelectedMonth, MONTH_NAMES_SHORT } from './monthNav.js';
 
 const YEAR_RANGE_BACK = 3;
@@ -83,6 +83,28 @@ export function ownerChip(owner) {
 
 export function georgiaBadge() {
   return el('span', { class: 'chip chip--georgia-flag', text: '🇬🇪 საქართველო' });
+}
+
+export const COLOR_PRESETS = ['#2563eb', '#16a34a', '#d97706', '#dc2626', '#7c3aed', '#db2777', '#0891b2', '#65a30d', '#ea580c', '#4f46e5', '#0d9488', '#be123c'];
+
+/** Modal color picker over the preset palette. Resolves with the color or null if cancelled. */
+export function pickColor(currentColor) {
+  return new Promise((resolve) => {
+    const body = el('div', {});
+    const grid = el('div', { class: 'color-swatch-row' });
+    COLOR_PRESETS.forEach(color => {
+      const swatch = el('button', { type: 'button', class: 'color-swatch', style: `background:${color}`, 'aria-pressed': String(color === currentColor) });
+      swatch.addEventListener('click', () => { resolve(color); close(); });
+      grid.appendChild(swatch);
+    });
+    body.appendChild(grid);
+    const { close } = openModal(body, { title: 'აირჩიე ფერი', onClose: () => resolve(null) });
+  });
+}
+
+/** Pseudo-category shown for free-spending grouping. */
+export function freePseudoCategory() {
+  return { id: 'free', name: 'თავისუფალი ხარჯვა', color: '#94a3b8' };
 }
 
 export { hexToRgb };

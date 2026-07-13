@@ -2,7 +2,7 @@
 // Single source of truth. All mutations go through updateState()/saveState().
 
 const STORAGE_KEY = 'familyBudget.v1';
-const CURRENT_VERSION = 2;
+const CURRENT_VERSION = 3;
 const SAVE_DEBOUNCE_MS = 300;
 const FREE_BUCKET_ID = 'free';
 
@@ -34,11 +34,7 @@ function seedState() {
       theme: 'light',
       accentColor: '#2563eb',
       fontScale: 'medium',
-      dashboardCardOrder: ['summary', 'income', 'rate', 'georgia', 'buckets', 'free', 'planVsActual'],
-      buckets: [
-        { id: 'bucket_essentials', name: 'აუცილებელი', percent: 65, color: '#2563eb', goalType: 'max' },
-        { id: 'bucket_savings', name: 'დანაზოგი', percent: 25, color: '#16a34a', goalType: 'min' }
-      ],
+      dashboardCardOrder: ['summary', 'income', 'rate', 'georgia', 'cat_essentials', 'cat_savings', 'free', 'planVsActual'],
       planFree: {
         giorgi: { percent: 5, color: '#7c3aed' },
         nino: { percent: 5, color: '#db2777' }
@@ -46,10 +42,14 @@ function seedState() {
       lastBackupAt: null,
       backupReminderDismissedAt: null
     },
+    // Unified category model (v3): a category is ALSO a dashboard block.
+    // parentId: null = own dashboard card; 'free' = counts as personal free spending;
+    // another category's id = its amounts are included in that category's card.
     categories: [
-      { id: 'cat_essentials', name: 'აუცილებელი ხარჯი', bucketId: 'bucket_essentials', georgiaTransfer: false },
-      { id: 'cat_georgia', name: 'საქართველოში გადასარიცხი', bucketId: 'bucket_essentials', georgiaTransfer: true },
-      { id: 'cat_other', name: 'სხვა', bucketId: FREE_BUCKET_ID, georgiaTransfer: false }
+      { id: 'cat_essentials', name: 'აუცილებელი', percent: 65, color: '#2563eb', goalType: 'max', georgiaTransfer: false, parentId: null },
+      { id: 'cat_georgia', name: 'საქართველოში გადასარიცხი', percent: 0, color: '#d97706', goalType: 'max', georgiaTransfer: true, parentId: 'cat_essentials' },
+      { id: 'cat_savings', name: 'დანაზოგი', percent: 25, color: '#16a34a', goalType: 'min', georgiaTransfer: false, parentId: null },
+      { id: 'cat_other', name: 'სხვა', percent: 0, color: '#94a3b8', goalType: 'max', georgiaTransfer: false, parentId: FREE_BUCKET_ID }
     ],
     templates: [],
     months: {
@@ -93,6 +93,47 @@ function migrateV1ToV2(raw) {
   return raw;
 }
 
+/** v3: merge the old two-level buckets+categories model into unified categories. */
+function migrateV2ToV3(raw) {
+  const buckets = (raw.settings && Array.isArray(raw.settings.buckets)) ? raw.settings.buckets : [];
+  const oldCats = Array.isArray(raw.categories) ? raw.categories : [];
+  const newCats = [];
+
+  buckets.forEach(b => {
+    const members = oldCats.filter(c => c.bucketId === b.id);
+    if (!members.length) {
+      // Bucket with no categories becomes a category itself (so it stays visible & assignable).
+      newCats.push({ id: b.id, name: b.name, percent: b.percent || 0, color: b.color || '#2563eb', goalType: b.goalType || 'max', georgiaTransfer: false, parentId: null });
+    } else {
+      members.forEach((c, i) => newCats.push({
+        id: c.id, name: c.name,
+        percent: i === 0 ? (b.percent || 0) : 0,
+        color: b.color || '#2563eb',
+        goalType: b.goalType || 'max',
+        georgiaTransfer: !!c.georgiaTransfer,
+        parentId: i === 0 ? null : members[0].id
+      }));
+    }
+  });
+  // Free-bucket (and orphaned) categories become free-spending categories.
+  oldCats.forEach(c => {
+    if (newCats.some(n => n.id === c.id)) return;
+    newCats.push({ id: c.id, name: c.name, percent: 0, color: '#94a3b8', goalType: 'max', georgiaTransfer: !!c.georgiaTransfer, parentId: FREE_BUCKET_ID });
+  });
+
+  raw.categories = newCats;
+  if (raw.settings) {
+    delete raw.settings.buckets;
+    const order = Array.isArray(raw.settings.dashboardCardOrder) ? raw.settings.dashboardCardOrder : [];
+    const topIds = newCats.filter(c => !c.parentId).map(c => c.id);
+    const i = order.indexOf('buckets');
+    if (i >= 0) order.splice(i, 1, ...topIds);
+    raw.settings.dashboardCardOrder = order;
+  }
+  raw.version = 3;
+  return raw;
+}
+
 function migrate(raw) {
   if (!raw || typeof raw !== 'object') return seedState();
   if (!raw.version) raw.version = 1;
@@ -100,11 +141,13 @@ function migrate(raw) {
   if (raw.version < 2) {
     raw = migrateV1ToV2(raw);
   }
+  if (raw.version < 3) {
+    raw = migrateV2ToV3(raw);
+  }
 
   // Ensure required top-level shape even if partially corrupted.
   const seed = seedState();
   raw.settings = raw.settings || seed.settings;
-  raw.settings.buckets = Array.isArray(raw.settings.buckets) && raw.settings.buckets.length ? raw.settings.buckets : seed.settings.buckets;
   raw.settings.planFree = raw.settings.planFree || seed.settings.planFree;
   raw.settings.dashboardCardOrder = raw.settings.dashboardCardOrder || seed.settings.dashboardCardOrder;
   raw.settings.theme = raw.settings.theme || 'light';
@@ -112,7 +155,14 @@ function migrate(raw) {
   raw.settings.fontScale = raw.settings.fontScale || 'medium';
   if (raw.settings.lastBackupAt === undefined) raw.settings.lastBackupAt = null;
   if (raw.settings.backupReminderDismissedAt === undefined) raw.settings.backupReminderDismissedAt = null;
-  raw.categories = Array.isArray(raw.categories) ? raw.categories : seed.categories;
+  raw.categories = Array.isArray(raw.categories) && raw.categories.length ? raw.categories : seed.categories;
+  raw.categories.forEach(c => {
+    if (typeof c.percent !== 'number') c.percent = 0;
+    if (!c.color) c.color = '#94a3b8';
+    if (!c.goalType) c.goalType = 'max';
+    if (c.parentId === undefined) c.parentId = null;
+    c.georgiaTransfer = !!c.georgiaTransfer;
+  });
   raw.templates = Array.isArray(raw.templates) ? raw.templates : [];
   raw.months = raw.months && typeof raw.months === 'object' ? raw.months : {};
   // Drop malformed month keys (an old bug could create e.g. "[object Object]").

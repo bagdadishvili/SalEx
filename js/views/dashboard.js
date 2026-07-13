@@ -2,7 +2,7 @@
 
 import { getState, updateState } from '../state.js';
 import { generateMonthTransactions, monthNeedsGeneration } from '../monthEngine.js';
-import { computeDashboard, computePlanVsActual, computeMonthTotals, formatMoney, formatPercent, parseAmountInput } from '../calc.js';
+import { computeDashboard, computePlanVsActual, computeMonthTotals, effectiveCardOrder, formatMoney, formatPercent, parseAmountInput } from '../calc.js';
 import { el, savedToast } from '../ui.js';
 import { getSelectedMonth, onMonthChange } from '../monthNav.js';
 import { renderMonthNav } from '../components.js';
@@ -49,14 +49,19 @@ export function renderDashboard(root) {
     const pva = computePlanVsActual(month, categories, settings);
 
     cardsWrap.innerHTML = '';
-    const order = settings.dashboardCardOrder.length ? settings.dashboardCardOrder : ['summary', 'income', 'rate', 'georgia', 'buckets', 'free', 'planVsActual'];
+    const order = effectiveCardOrder(settings, categories);
     const ctx = { month, key, dash, pva, categories, settings, rerender: draw };
 
     order.forEach(cardKey => {
       const renderer = CARD_RENDERERS[cardKey];
-      if (!renderer) return;
-      const out = renderer(ctx);
-      (Array.isArray(out) ? out : [out]).forEach(node => cardsWrap.appendChild(node));
+      if (renderer) {
+        const out = renderer(ctx);
+        (Array.isArray(out) ? out : [out]).forEach(node => cardsWrap.appendChild(node));
+        return;
+      }
+      // Not a fixed card — it's a user category block.
+      const b = dash.buckets.find(x => x.id === cardKey);
+      if (b) cardsWrap.appendChild(categoryCard(b));
     });
   }
 
@@ -180,16 +185,14 @@ function georgiaCard({ dash }) {
   });
 }
 
-function bucketsBlock({ dash }) {
-  return dash.buckets.map(b => {
-    const pct = b.planned > 0 ? Math.min(100, (b.actual / b.planned) * 100) : 0;
-    return statCard({
-      label: b.name,
-      value: formatMoney(b.planned, 'EUR'),
-      sub: `გადახდილია: ${formatMoney(b.actual, 'EUR')} · ${formatPercent(b.pct)}`,
-      pct,
-      color: b.color
-    });
+function categoryCard(b) {
+  const pct = b.planned > 0 ? Math.min(100, (b.actual / b.planned) * 100) : 0;
+  return statCard({
+    label: b.name,
+    value: formatMoney(b.planned, 'EUR'),
+    sub: `გადახდილია: ${formatMoney(b.actual, 'EUR')} · ${formatPercent(b.pct)} შემოსავლიდან`,
+    pct,
+    color: b.color
   });
 }
 
@@ -221,7 +224,7 @@ function freePersonBlock(label, person) {
 
 function planVsActualCard({ pva }) {
   const card = el('div', { class: 'card', style: 'grid-column: 1 / -1' });
-  card.appendChild(el('div', { class: 'card__title', text: 'გეგმა vs ფაქტი' }));
+  card.appendChild(el('div', { class: 'card__title', text: 'დაგეგმილი vs რეალური' }));
 
   const rowsWrap = el('div', {});
   pva.forEach(row => {
@@ -297,7 +300,6 @@ const CARD_RENDERERS = {
   income: incomeCard,
   rate: rateCard,
   georgia: georgiaCard,
-  buckets: bucketsBlock,
   free: freeCard,
   planVsActual: planVsActualCard
 };

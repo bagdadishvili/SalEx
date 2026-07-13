@@ -25,41 +25,67 @@ export function txnPlannedEur(txn, monthRate) {
   return txn.amountPlanned;
 }
 
-function categoryMap(categories) {
-  const map = {};
-  categories.forEach(c => { map[c.id] = c; });
-  return map;
+/**
+ * Walks parentId links up to the top-level category (or a free-spending category).
+ * Returns the resolved category object, or null if catId is unknown.
+ */
+export function resolveTopCategory(categories, catId) {
+  let c = categories.find(x => x.id === catId);
+  let guard = 0;
+  while (c && c.parentId && c.parentId !== FREE_BUCKET_ID && guard++ < 10) {
+    const p = categories.find(x => x.id === c.parentId);
+    if (!p) break;
+    c = p;
+  }
+  return c || null;
 }
 
-function sumPlannedByBucket(month, categories, bucketId) {
-  const catMap = categoryMap(categories);
+/** Top-level grouping id for a transaction's category: a category id or 'free'. */
+export function topIdOf(categories, catId) {
+  const c = resolveTopCategory(categories, catId);
+  if (!c) return null;
+  return c.parentId === FREE_BUCKET_ID ? FREE_BUCKET_ID : c.id;
+}
+
+function sumByTop(month, categories, topId, paidOnly) {
   return month.transactions
-    .filter(t => catMap[t.categoryId]?.bucketId === bucketId)
-    .reduce((sum, t) => sum + txnPlannedEur(t, month.exchangeRate), 0);
+    .filter(t => topIdOf(categories, t.categoryId) === topId && (!paidOnly || t.paid))
+    .reduce((s, t) => s + (paidOnly ? txnAmountEur(t, month.exchangeRate) : txnPlannedEur(t, month.exchangeRate)), 0);
 }
 
-function sumActualByBucket(month, categories, bucketId) {
-  const catMap = categoryMap(categories);
-  return month.transactions
-    .filter(t => catMap[t.categoryId]?.bucketId === bucketId && t.paid)
-    .reduce((sum, t) => sum + txnAmountEur(t, month.exchangeRate), 0);
-}
-
-/** Sum planned/actual EUR within the free bucket, restricted to one owner. */
+/** Sum paid EUR within free-spending categories, restricted to one owner. */
 function sumFreeByOwner(month, categories, owner, usePaidActual) {
-  const catMap = categoryMap(categories);
   return month.transactions
-    .filter(t => catMap[t.categoryId]?.bucketId === FREE_BUCKET_ID && t.owner === owner)
+    .filter(t => topIdOf(categories, t.categoryId) === FREE_BUCKET_ID && t.owner === owner)
     .reduce((sum, t) => {
       if (usePaidActual) return t.paid ? sum + txnAmountEur(t, month.exchangeRate) : sum;
       return sum + txnPlannedEur(t, month.exchangeRate);
     }, 0);
 }
 
-/** Sum of transactions flagged as Georgia-transfer categories (independent of their budget bucket). */
+/**
+ * The dashboard card order actually rendered: stored order, cleaned of stale ids,
+ * with any new top-level categories inserted before the free-money card.
+ */
+export function effectiveCardOrder(settings, categories) {
+  const fixed = ['summary', 'income', 'rate', 'georgia', 'free', 'planVsActual'];
+  const topIds = categories.filter(c => !c.parentId).map(c => c.id);
+  const stored = Array.isArray(settings.dashboardCardOrder) ? settings.dashboardCardOrder : [];
+  const order = stored.filter(k => fixed.includes(k) || topIds.includes(k));
+  fixed.forEach(k => { if (!order.includes(k)) order.push(k); });
+  topIds.forEach(id => {
+    if (!order.includes(id)) {
+      const i = order.indexOf('free');
+      order.splice(i >= 0 ? i : order.length, 0, id);
+    }
+  });
+  return order;
+}
+
+/** Sum of transactions flagged as Georgia-transfer categories (independent of where they're counted). */
 function sumGeorgiaTransfer(month, categories) {
-  const catMap = categoryMap(categories);
-  const txns = month.transactions.filter(t => catMap[t.categoryId]?.georgiaTransfer);
+  const geoIds = new Set(categories.filter(c => c.georgiaTransfer).map(c => c.id));
+  const txns = month.transactions.filter(t => geoIds.has(t.categoryId));
   const plannedGel = txns.filter(t => t.currency === 'GEL').reduce((s, t) => s + t.amountPlanned, 0);
   const plannedEur = txns.reduce((s, t) => s + txnPlannedEur(t, month.exchangeRate), 0);
   const actualEur = txns.filter(t => t.paid).reduce((s, t) => s + txnAmountEur(t, month.exchangeRate), 0);
@@ -75,9 +101,10 @@ export function computeDashboard(month, categories, settings) {
   const T = totalIncome(month);
   const pct = (x) => T > 0 ? Math.round((x / T) * 1000) / 10 : 0;
 
-  const buckets = settings.buckets.map(b => {
-    const planned = sumPlannedByBucket(month, categories, b.id);
-    const actual = sumActualByBucket(month, categories, b.id);
+  // One "bucket" per top-level category; child categories' amounts roll up into it.
+  const buckets = categories.filter(c => !c.parentId).map(b => {
+    const planned = sumByTop(month, categories, b.id, false);
+    const actual = sumByTop(month, categories, b.id, true);
     return { ...b, planned, actual, pct: pct(planned) };
   });
   const bucketsPlannedTotal = buckets.reduce((s, b) => s + b.planned, 0);
@@ -146,10 +173,10 @@ export function computePlanVsActual(month, categories, settings) {
   return rows;
 }
 
-/** Sum of all bucket percents + free-money percents; must equal 100 for a valid plan. */
-export function sumAllPercents(settings) {
-  const bucketSum = settings.buckets.reduce((s, b) => s + (Number(b.percent) || 0), 0);
-  return bucketSum + (Number(settings.planFree.giorgi.percent) || 0) + (Number(settings.planFree.nino.percent) || 0);
+/** Sum of top-level category percents + free-money percents; must equal 100 for a valid plan. */
+export function sumAllPercents(settings, categories) {
+  const catSum = categories.filter(c => !c.parentId).reduce((s, c) => s + (Number(c.percent) || 0), 0);
+  return catSum + (Number(settings.planFree.giorgi.percent) || 0) + (Number(settings.planFree.nino.percent) || 0);
 }
 
 // ---- Number formatting (German-style: space thousands, comma decimals) ----
@@ -207,18 +234,15 @@ export function runSelfChecks() {
   assertEq('oneTime due in its month', isTemplateDueInMonth(ot, '2026-08'), true);
   assertEq('oneTime not due next month', isTemplateDueInMonth(ot, '2026-09'), false);
 
-  // Dashboard math with the generic buckets model.
+  // Dashboard math with the unified category model.
   const settings = {
-    buckets: [
-      { id: 'bucket_essentials', name: 'აუცილებელი', percent: 65, color: '#2563eb', goalType: 'max' },
-      { id: 'bucket_savings', name: 'დანაზოგი', percent: 25, color: '#16a34a', goalType: 'min' }
-    ],
     planFree: { giorgi: { percent: 5, color: '#7c3aed' }, nino: { percent: 5, color: '#db2777' } }
   };
   const categories = [
-    { id: 'cat_essentials', bucketId: 'bucket_essentials', georgiaTransfer: false },
-    { id: 'cat_georgia', bucketId: 'bucket_essentials', georgiaTransfer: true },
-    { id: 'cat_other', bucketId: FREE_BUCKET_ID, georgiaTransfer: false }
+    { id: 'cat_essentials', name: 'ess', percent: 65, color: '#2563eb', goalType: 'max', georgiaTransfer: false, parentId: null },
+    { id: 'cat_georgia', name: 'geo', percent: 0, color: '#d97706', goalType: 'max', georgiaTransfer: true, parentId: 'cat_essentials' },
+    { id: 'cat_savings', name: 'sav', percent: 25, color: '#16a34a', goalType: 'min', georgiaTransfer: false, parentId: null },
+    { id: 'cat_other', name: 'oth', percent: 0, color: '#94a3b8', goalType: 'max', georgiaTransfer: false, parentId: FREE_BUCKET_ID }
   ];
   const month = {
     exchangeRate: 3, income: { giorgi: 1000, nino: 0 }, plannedSavings: null,
@@ -227,14 +251,17 @@ export function runSelfChecks() {
       { id: 't2', categoryId: 'cat_georgia', owner: 'giorgi', currency: 'GEL', amountPlanned: 300, amountActual: null, paid: false }
     ]
   };
-  assertEq('sumAllPercents == 100', sumAllPercents(settings), 100);
+  assertEq('sumAllPercents == 100', sumAllPercents(settings, categories), 100);
+  assertEq('georgia rolls up into essentials', topIdOf(categories, 'cat_georgia'), 'cat_essentials');
+  assertEq('free category resolves to free', topIdOf(categories, 'cat_other'), FREE_BUCKET_ID);
   const dash = computeDashboard(month, categories, settings);
-  const essentialsBucket = dash.buckets.find(b => b.id === 'bucket_essentials');
-  assertClose('essentials bucket actual == 650', essentialsBucket.actual, 650, 0.01);
+  const essentialsBucket = dash.buckets.find(b => b.id === 'cat_essentials');
+  assertClose('essentials actual == 650', essentialsBucket.actual, 650, 0.01);
+  assertClose('essentials planned includes georgia child (650+100)', essentialsBucket.planned, 750, 0.01);
   assertClose('georgia info plannedEur == 100 (300/3)', dash.georgia.plannedEur, 100, 0.01);
   assertEq('georgia info plannedGel == 300', dash.georgia.plannedGel, 300);
   const pva = computePlanVsActual(month, categories, settings);
-  const essentialsRow = pva.find(r => r.key === 'bucket_essentials');
+  const essentialsRow = pva.find(r => r.key === 'cat_essentials');
   assertClose('plan-vs-actual essentials % == 65 (650/1000)', essentialsRow.actual, 65, 0.1);
   assertEq('plan-vs-actual essentials at target -> ok', essentialsRow.ok, true);
 

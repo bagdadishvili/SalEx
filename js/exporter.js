@@ -1,7 +1,7 @@
 // exporter.js — JSON export/import and CSV export (UTF-8 with BOM) per master-prompt §5.5.
 
 import { getState, replaceState, updateState, ensureMonth } from './state.js';
-import { txnAmountEur } from './calc.js';
+import { txnAmountEur, resolveTopCategory } from './calc.js';
 
 function uid(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -61,12 +61,11 @@ function csvEscape(value) {
 
 export function exportCsv() {
   const state = getState();
-  const { categories, settings, months } = state;
+  const { categories, months } = state;
   const bucketNameOf = (id) => {
-    const cat = categories.find(c => c.id === id);
-    if (!cat) return '';
-    if (cat.bucketId === 'free') return 'თავისუფალი ხარჯვა';
-    return settings.buckets.find(b => b.id === cat.bucketId)?.name || '';
+    const top = resolveTopCategory(categories, id);
+    if (!top) return '';
+    return top.parentId === 'free' ? 'თავისუფალი ხარჯვა' : top.name;
   };
   const nameOf = (id) => categories.find(c => c.id === id)?.name || '';
   const georgiaOf = (id) => (categories.find(c => c.id === id)?.georgiaTransfer ? 'yes' : 'no');
@@ -177,7 +176,7 @@ export function importCsv(file) {
             const catName = get(r, iCat);
             let cat = draft.categories.find(c => c.name === catName);
             if (!cat && catName) {
-              cat = { id: uid('cat'), name: catName, bucketId: 'free', georgiaTransfer: get(r, iGeo) === 'yes' };
+              cat = { id: uid('cat'), name: catName, percent: 0, color: '#94a3b8', goalType: 'max', georgiaTransfer: get(r, iGeo) === 'yes', parentId: 'free' };
               draft.categories.push(cat);
             }
 

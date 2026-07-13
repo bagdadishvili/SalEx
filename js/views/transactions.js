@@ -2,10 +2,10 @@
 
 import { getState, updateState, ensureMonth, todayISO, FREE_BUCKET_ID } from '../state.js';
 import { generateMonthTransactions, monthNeedsGeneration } from '../monthEngine.js';
-import { txnAmountEur, txnPlannedEur, formatMoney, parseAmountInput } from '../calc.js';
+import { txnAmountEur, txnPlannedEur, topIdOf, resolveTopCategory, formatMoney, parseAmountInput } from '../calc.js';
 import { el, openModal, confirmDialog, toast, formatDate } from '../ui.js';
 import { getSelectedMonth, onMonthChange } from '../monthNav.js';
-import { renderMonthNav, bucketChip, ownerChip } from '../components.js';
+import { renderMonthNav, bucketChip, ownerChip, freePseudoCategory } from '../components.js';
 
 function uid(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -98,7 +98,6 @@ export function renderTransactions(root) {
     const state = getState();
     const month = state.months[key];
     const categories = state.categories;
-    const bucketIdOf = (catId) => categories.find(c => c.id === catId)?.bucketId;
 
     let txns = month.transactions.slice();
     if (statusFilter === 'unpaid') txns = txns.filter(t => !t.paid);
@@ -125,9 +124,9 @@ export function renderTransactions(root) {
     if (!groupByBucket) {
       txns.forEach(t => list.appendChild(txnRow(t, month, categories, draw)));
     } else {
-      const bucketList = [...state.settings.buckets, { id: FREE_BUCKET_ID, name: 'თავისუფალი ხარჯვა' }];
+      const bucketList = [...categories.filter(c => !c.parentId), freePseudoCategory()];
       bucketList.forEach(b => {
-        const group = txns.filter(t => bucketIdOf(t.categoryId) === b.id);
+        const group = txns.filter(t => topIdOf(categories, t.categoryId) === b.id);
         if (!group.length) return;
         list.appendChild(el('div', { class: 'card__sub', style: 'margin-top:12px;font-weight:700', text: b.name }));
         group.forEach(t => list.appendChild(txnRow(t, month, categories, draw)));
@@ -145,13 +144,9 @@ function filterBtn(label, onClick) {
 }
 
 function txnRow(txn, month, categories, refresh) {
-  const state = getState();
   const category = categories.find(c => c.id === txn.categoryId);
-  const bucket = category
-    ? (category.bucketId === FREE_BUCKET_ID
-        ? { id: FREE_BUCKET_ID, name: 'თავისუფალი ხარჯვა', color: '#94a3b8' }
-        : state.settings.buckets.find(b => b.id === category.bucketId))
-    : null;
+  const top = category ? resolveTopCategory(categories, category.id) : null;
+  const bucket = top ? (top.parentId === FREE_BUCKET_ID ? freePseudoCategory() : top) : null;
   const overdue = !txn.paid && txn.dueDate && txn.dueDate < todayISO();
 
   const row = el('div', { class: 'row' + (txn.paid ? ' row--paid' : '') + (overdue ? ' row--overdue' : '') });
