@@ -54,7 +54,7 @@ function renderBuckets() {
 
     state.categories.filter(c => !c.parentId).forEach(cat => {
       const row = el('div', { class: 'order-list__item', style: 'flex-wrap:wrap;gap:8px' });
-      row.appendChild(el('span', { class: 'color-dot', style: `background:${cat.color}` }));
+      row.appendChild(el('span', { class: 'color-dot', style: `background:${cat.color};width:24px;height:24px` }));
       row.appendChild(el('span', { text: cat.name, style: 'flex:1;min-width:120px;font-weight:600' }));
       const percentInput = el('input', { type: 'number', min: '0', max: '100', value: String(cat.percent), style: 'width:70px;min-height:36px' });
       percentInput.addEventListener('input', () => {
@@ -267,7 +267,7 @@ function renderSync() {
     refreshStatus();
   });
 
-  const disconnectBtn = el('button', { class: 'btn btn--ghost', text: 'გათიშვა' });
+  const disconnectBtn = el('button', { class: 'btn btn--ghost btn--sm', style: 'margin-left:auto', text: 'გათიშვა' });
   disconnectBtn.addEventListener('click', () => {
     sync.saveSyncConfig({ token: '', gistId: null });
     tokenInput.value = '';
@@ -279,7 +279,12 @@ function renderSync() {
   card.appendChild(el('div', { class: 'field' }, [el('label', { text: 'GitHub Personal Access Token (gist scope)' }), tokenInput]));
   card.appendChild(el('div', { class: 'field' }, [el('label', { text: 'Gist ID' }), gistIdInput]));
   card.appendChild(statusEl);
-  card.appendChild(el('div', { class: 'btn-row' }, [connectBtn, pullBtn, pushBtn, disconnectBtn]));
+  card.appendChild(el('p', {
+    class: 'card__sub',
+    style: 'margin-top:8px',
+    text: 'დაკავშირების შემდეგ სინქრონიზაცია ავტომატურია: ცვლილება 2 წამში იტვირთება, აპის გახსნისას კი უახლესი ვერსია ჩამოდის. ⬇/⬆ ღილაკები მხოლოდ სურვილისამებრ, ხელით შესამოწმებლადაა.'
+  }));
+  card.appendChild(el('div', { class: 'btn-row', style: 'align-items:center' }, [connectBtn, pullBtn, pushBtn, disconnectBtn]));
 
   return card;
 }

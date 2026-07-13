@@ -21,9 +21,9 @@ function usageCount(state, categoryId) {
 
 function parentLabel(state, cat) {
   if (!cat.parentId) return null;
-  if (cat.parentId === FREE_BUCKET_ID) return 'ითვლება: თავისუფალი ხარჯვა';
+  if (cat.parentId === FREE_BUCKET_ID) return '→ თავისუფალი';
   const p = state.categories.find(c => c.id === cat.parentId);
-  return p ? `ითვლება: ${p.name}` : null;
+  return p ? `→ ${p.name}` : null;
 }
 
 export function renderCategories(root) {
@@ -69,17 +69,17 @@ export function renderCategories(root) {
       const isTop = !cat.parentId;
       const pLabel = parentLabel(state, cat);
 
-      const row = el('div', { class: 'row', style: isTop ? '' : 'margin-left:16px' });
+      const row = el('div', { class: 'row' });
       const main = el('div', { class: 'row__main' }, [
         el('div', { class: 'row__name', style: 'display:flex;align-items:center;gap:8px' }, [
           el('span', { class: 'color-dot', style: `background:${cat.color}` }),
           el('span', { text: cat.name })
         ]),
         el('div', { class: 'row__meta' }, [
-          isTop ? el('span', { class: 'chip', text: `მიზანი: ${formatPercent(cat.percent, 0)} · ${cat.goalType === 'min' ? 'მინ.' : 'მაქს.'}` }) : null,
+          isTop ? el('span', { class: 'chip', text: `${formatPercent(cat.percent, 0)} · ${cat.goalType === 'min' ? 'მინ.' : 'მაქს.'}` }) : null,
           pLabel ? el('span', { class: 'chip', text: pLabel }) : null,
-          cat.georgiaTransfer ? el('span', { class: 'chip chip--georgia', text: '🇬🇪 საქართველო' }) : null,
-          el('span', { text: `გამოყენებულია: ${count}` })
+          cat.georgiaTransfer ? el('span', { class: 'chip chip--georgia', text: '🇬🇪' }) : null,
+          el('span', { text: String(count) + ' ჩანაწ.' })
         ])
       ]);
 
