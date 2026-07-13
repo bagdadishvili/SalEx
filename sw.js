@@ -1,6 +1,6 @@
 // sw.js — cache-first service worker for the app shell. Bump CACHE_VERSION on every release.
 
-const CACHE_VERSION = 'family-budget-v1';
+const CACHE_VERSION = 'family-budget-v2';
 
 // Paths are resolved relative to this file's location, so the app works at
 // https://<user>.github.io/<repo>/ as well as at the domain root.
@@ -17,6 +17,7 @@ const APP_SHELL = [
   './js/components.js',
   './js/ui.js',
   './js/exporter.js',
+  './js/sync.js',
   './js/views/dashboard.js',
   './js/views/transactions.js',
   './js/views/templates.js',
