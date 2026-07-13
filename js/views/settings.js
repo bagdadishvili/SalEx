@@ -3,14 +3,14 @@
 import { getState, updateState, wipeState } from '../state.js';
 import { sumAllPercents, formatPercent } from '../calc.js';
 import { el, confirmDialog, toast, openModal } from '../ui.js';
-import { exportJson, importJson, exportCsv } from '../exporter.js';
+import { exportJson, importJson, exportCsv, importCsv } from '../exporter.js';
 import { applyAppearance, checkBackupReminder } from '../app.js';
 import * as sync from '../sync.js';
 
 const COLOR_PRESETS = ['#2563eb', '#16a34a', '#d97706', '#dc2626', '#7c3aed', '#db2777', '#0891b2', '#65a30d', '#ea580c', '#4f46e5', '#0d9488', '#be123c'];
 
 const CARD_LABELS = {
-  income: 'შემოსავალი', rate: 'კურსი', georgia: 'საქართველოში გადასარიცხი',
+  summary: 'თვის მიმოხილვა', income: 'შემოსავალი', rate: 'კურსი', georgia: 'საქართველოში გადასარიცხი',
   buckets: 'ბიუჯეტის კატეგორიები', free: 'თავისუფალი თანხა', planVsActual: 'გეგმა vs ფაქტი'
 };
 
@@ -53,14 +53,14 @@ function renderBuckets() {
   const list = el('div', { class: 'order-list', style: 'margin-top:8px' });
   const sumEl = el('div', { class: 'sum-indicator', style: 'margin-top:8px' });
   const addBtn = el('button', { class: 'btn btn--secondary btn--sm', text: '+ ახალი კატეგორია' });
-  const saveBtn = el('button', { class: 'btn btn--primary', text: 'პროცენტების შენახვა' });
 
   function updateSum() {
     const state = getState();
     const sum = sumAllPercents(state.settings);
-    sumEl.textContent = `ჯამი: ${sum}% (უნდა იყოს 100%)`;
+    sumEl.textContent = sum === 100
+      ? `ჯამი: ${sum}% ✓ — ყველაფერი ავტომატურად ინახება`
+      : `ჯამი: ${sum}% (უნდა იყოს 100%)`;
     sumEl.className = 'sum-indicator ' + (sum === 100 ? 'sum-indicator--ok' : 'sum-indicator--bad');
-    saveBtn.disabled = sum !== 100;
   }
 
   function draw() {
@@ -77,8 +77,8 @@ function renderBuckets() {
       });
 
       const percentInput = el('input', { type: 'number', min: '0', max: '100', value: String(bucket.percent), style: 'width:70px;min-height:36px' });
-      percentInput.addEventListener('input', updateSum);
-      percentInput.addEventListener('change', () => {
+      percentInput.addEventListener('input', () => {
+        // Commit immediately so the live sum indicator reflects what's typed.
         updateState(draft => { draft.settings.buckets[idx].percent = Number(percentInput.value) || 0; return draft; });
         updateSum();
       });
@@ -126,8 +126,7 @@ function renderBuckets() {
       const row = el('div', { class: 'order-list__item', style: 'flex-wrap:wrap;gap:8px' });
       row.appendChild(el('span', { text: label, style: 'min-width:140px;font-weight:600' }));
       const percentInput = el('input', { type: 'number', min: '0', max: '100', value: String(cfg.percent), style: 'width:70px;min-height:36px' });
-      percentInput.addEventListener('input', updateSum);
-      percentInput.addEventListener('change', () => {
+      percentInput.addEventListener('input', () => {
         updateState(draft => { draft.settings.planFree[owner].percent = Number(percentInput.value) || 0; return draft; });
         updateSum();
       });
@@ -157,16 +156,15 @@ function renderBuckets() {
     draw();
   });
 
-  saveBtn.addEventListener('click', () => {
-    const state = getState();
-    if (sumAllPercents(state.settings) !== 100) { toast('პროცენტების ჯამი უნდა იყოს 100%', 'error'); return; }
-    toast('შენახულია ✓');
-  });
-
   draw();
   card.appendChild(list);
   card.appendChild(sumEl);
-  card.appendChild(el('div', { class: 'btn-row' }, [addBtn, saveBtn]));
+  card.appendChild(el('p', {
+    class: 'card__sub',
+    style: 'margin-top:8px',
+    text: 'რას ნიშნავს „მაქს." და „მინ.": ეს განსაზღვრავს, როგორ შეფასდეს კატეგორია „გეგმა vs ფაქტი" ბლოკში. მაქს. (ხარჯი) — მიზანი შესრულებულია (მწვანე), თუ პროცენტზე მეტს არ ხარჯავ. მინ. (დანაზოგი) — მიზანი შესრულებულია, თუ მინიმუმ ამ პროცენტს გადადებ. სხვა არაფერზე არ მოქმედებს.'
+  }));
+  card.appendChild(el('div', { class: 'btn-row' }, [addBtn]));
   return card;
 }
 
@@ -270,6 +268,21 @@ function renderSync() {
   card.appendChild(el('div', { class: 'card__title', text: 'სინქრონიზაცია მოწყობილობებს შორის' }));
   card.appendChild(el('p', { class: 'card__sub', text: 'დააკავშირე კომპიუტერი და სმარტფონი GitHub-ის პირადი Gist-ის საშუალებით — ცვლილება ერთგან ავტომატურად აისახება მეორეზეც.' }));
 
+  card.appendChild(el('details', { class: 'help-details' }, [
+    el('summary', { text: '📖 ინსტრუქცია ნაბიჯ-ნაბიჯ: როგორ დავაკავშირო?' }),
+    el('ol', {}, [
+      el('li', { text: 'გახსენი github.com და შედი ანგარიშზე (თუ არ გაქვს — დარეგისტრირდი უფასოდ).' }),
+      el('li', { text: 'დააჭირე შენს პროფილის ფოტოს (ზედა მარჯვენა კუთხე) → Settings.' }),
+      el('li', { text: 'გვერდის ბოლოში, მარცხენა მენიუში: Developer settings → Personal access tokens → Tokens (classic).' }),
+      el('li', { text: 'დააჭირე „Generate new token (classic)". Note ველში ჩაწერე „family-budget". Expiration: აირჩიე „No expiration".' }),
+      el('li', { text: 'უფლებების სიაში მონიშნე მხოლოდ „gist" — სხვა არაფერი.' }),
+      el('li', { text: 'დააჭირე „Generate token" და დააკოპირე კოდი (ghp_-ით იწყება). ის მხოლოდ ერთხელ გამოჩნდება!' }),
+      el('li', { text: 'ჩასვი token ქვემოთ ველში და დააჭირე „დაკავშირებას" — ავტომატურად შეიქმნება Gist და გამოჩნდება Gist ID.' }),
+      el('li', { text: 'მეორე მოწყობილობაზე ჩაწერე იგივე token + ეს Gist ID და იქაც დააჭირე „დაკავშირებას".' }),
+      el('li', { text: 'მზადაა — ამის შემდეგ ყველა ცვლილება ავტომატურად სინქრონდება ორივე მოწყობილობაზე.' })
+    ])
+  ]));
+
   const cfg = sync.getSyncConfig();
 
   const tokenInput = el('input', { type: 'password', placeholder: 'GitHub token (ghp_...)', value: cfg.token || '', autocomplete: 'off' });
@@ -305,12 +318,25 @@ function renderSync() {
     refreshStatus();
   });
 
-  const pullBtn = el('button', { class: 'btn btn--secondary', text: 'ახლავე მოტანა' });
+  // Pull = download the latest data saved from the OTHER device.
+  const pullBtn = el('button', { class: 'btn btn--secondary', text: '⬇ ჩამოტვირთვა (მეორე მოწყობილობის მონაცემები)' });
   pullBtn.addEventListener('click', async () => {
     try {
       const pulled = await sync.pullNow();
-      toast(pulled ? 'მონაცემები განახლდა ✓' : 'უკვე განახლებულია');
+      toast(pulled ? 'მონაცემები განახლდა ✓' : 'უკვე უახლესი ვერსია გაქვს ✓');
       if (pulled) location.reload();
+    } catch (e) {
+      toast('შეცდომა: ' + e.message, 'error');
+    }
+    refreshStatus();
+  });
+
+  // Push = upload this device's data right now (normally happens automatically).
+  const pushBtn = el('button', { class: 'btn btn--secondary', text: '⬆ ატვირთვა (ამ მოწყობილობის მონაცემები)' });
+  pushBtn.addEventListener('click', async () => {
+    try {
+      const pushed = await sync.pushNow();
+      toast(pushed ? 'აიტვირთა ✓' : 'ჯერ დააკავშირე სინქრონიზაცია', pushed ? 'ok' : 'error');
     } catch (e) {
       toast('შეცდომა: ' + e.message, 'error');
     }
@@ -329,7 +355,7 @@ function renderSync() {
   card.appendChild(el('div', { class: 'field' }, [el('label', { text: 'GitHub Personal Access Token (gist scope)' }), tokenInput]));
   card.appendChild(el('div', { class: 'field' }, [el('label', { text: 'Gist ID' }), gistIdInput]));
   card.appendChild(statusEl);
-  card.appendChild(el('div', { class: 'btn-row' }, [connectBtn, pullBtn, disconnectBtn]));
+  card.appendChild(el('div', { class: 'btn-row' }, [connectBtn, pullBtn, pushBtn, disconnectBtn]));
 
   return card;
 }
@@ -379,7 +405,24 @@ function renderDataSection() {
   const exportCsvBtn = el('button', { class: 'btn btn--secondary', text: 'CSV ექსპორტი' });
   exportCsvBtn.addEventListener('click', () => { exportCsv(); toast('CSV ჩამოტვირთულია ✓'); });
 
-  btnRow.append(exportJsonBtn, importBtn, importInput, exportCsvBtn);
+  const importCsvInput = el('input', { type: 'file', accept: '.csv', style: 'display:none' });
+  const importCsvBtn = el('button', { class: 'btn btn--secondary', text: 'CSV იმპორტი' });
+  importCsvBtn.addEventListener('click', () => importCsvInput.click());
+  importCsvInput.addEventListener('change', async () => {
+    const file = importCsvInput.files[0];
+    if (!file) return;
+    const ok = await confirmDialog('CSV იმპორტი დაამატებს ტრანზაქციებს არსებულ მონაცემებს (ზუსტი დუბლიკატები გამოტოვდება, არაფერი წაიშლება). გავაგრძელო?', { confirmLabel: 'იმპორტი' });
+    if (!ok) { importCsvInput.value = ''; return; }
+    try {
+      const { added, skipped } = await importCsv(file);
+      toast(`დაემატა ${added} ტრანზაქცია${skipped ? `, გამოტოვდა ${skipped}` : ''} ✓`);
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+    importCsvInput.value = '';
+  });
+
+  btnRow.append(exportJsonBtn, importBtn, importInput, exportCsvBtn, importCsvBtn, importCsvInput);
   card.appendChild(btnRow);
 
   return card;

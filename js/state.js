@@ -34,7 +34,7 @@ function seedState() {
       theme: 'light',
       accentColor: '#2563eb',
       fontScale: 'medium',
-      dashboardCardOrder: ['income', 'rate', 'georgia', 'buckets', 'free', 'planVsActual'],
+      dashboardCardOrder: ['summary', 'income', 'rate', 'georgia', 'buckets', 'free', 'planVsActual'],
       buckets: [
         { id: 'bucket_essentials', name: 'აუცილებელი', percent: 65, color: '#2563eb', goalType: 'max' },
         { id: 'bucket_savings', name: 'დანაზოგი', percent: 25, color: '#16a34a', goalType: 'min' }
@@ -43,7 +43,8 @@ function seedState() {
         giorgi: { percent: 5, color: '#7c3aed' },
         nino: { percent: 5, color: '#db2777' }
       },
-      lastBackupAt: null
+      lastBackupAt: null,
+      backupReminderDismissedAt: null
     },
     categories: [
       { id: 'cat_essentials', name: 'აუცილებელი ხარჯი', bucketId: 'bucket_essentials', georgiaTransfer: false },
@@ -110,9 +111,18 @@ function migrate(raw) {
   raw.settings.accentColor = raw.settings.accentColor || '#2563eb';
   raw.settings.fontScale = raw.settings.fontScale || 'medium';
   if (raw.settings.lastBackupAt === undefined) raw.settings.lastBackupAt = null;
+  if (raw.settings.backupReminderDismissedAt === undefined) raw.settings.backupReminderDismissedAt = null;
   raw.categories = Array.isArray(raw.categories) ? raw.categories : seed.categories;
   raw.templates = Array.isArray(raw.templates) ? raw.templates : [];
   raw.months = raw.months && typeof raw.months === 'object' ? raw.months : {};
+  // Drop malformed month keys (an old bug could create e.g. "[object Object]").
+  Object.keys(raw.months).forEach(k => {
+    if (!/^\d{4}-\d{2}$/.test(k)) delete raw.months[k];
+  });
+  // New dashboard card: month summary (added later, keep existing user order intact).
+  if (!raw.settings.dashboardCardOrder.includes('summary')) {
+    raw.settings.dashboardCardOrder.unshift('summary');
+  }
   if (!raw.updatedAt) raw.updatedAt = new Date().toISOString();
   raw.version = CURRENT_VERSION;
   return raw;
@@ -143,13 +153,22 @@ export function getState() {
   return state;
 }
 
-/** Ensures a month object exists (without template generation — that's monthEngine's job). */
-export function ensureMonth(key) {
-  if (!state.months[key]) {
-    const keys = Object.keys(state.months).sort();
+/**
+ * Ensures a month object exists (without template generation — that's monthEngine's job).
+ * Accepts (target, key) where target is a state object/draft, or just (key) to use the live state.
+ */
+export function ensureMonth(target, key) {
+  let obj = target;
+  if (typeof target === 'string' && key === undefined) {
+    obj = state;
+    key = target;
+  }
+  if (!obj || typeof obj.months !== 'object') return null;
+  if (!obj.months[key]) {
+    const keys = Object.keys(obj.months).sort();
     const prevKey = keys.filter(k => k < key).pop();
-    const prev = prevKey ? state.months[prevKey] : null;
-    state.months[key] = {
+    const prev = prevKey ? obj.months[prevKey] : null;
+    obj.months[key] = {
       exchangeRate: prev ? prev.exchangeRate : 3.00,
       income: prev ? { ...prev.income } : { giorgi: 0, nino: 0 },
       plannedSavings: null,
@@ -157,7 +176,7 @@ export function ensureMonth(key) {
       transactions: []
     };
   }
-  return state.months[key];
+  return obj.months[key];
 }
 
 /** Mutate state via a callback that receives a deep clone; result replaces state. */

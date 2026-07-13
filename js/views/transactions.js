@@ -1,7 +1,7 @@
 // views/transactions.js — Transactions list, filters, paid-flow §5.2.
 
 import { getState, updateState, ensureMonth, todayISO, FREE_BUCKET_ID } from '../state.js';
-import { generateMonthTransactions } from '../monthEngine.js';
+import { generateMonthTransactions, monthNeedsGeneration } from '../monthEngine.js';
 import { txnAmountEur, txnPlannedEur, formatMoney, parseAmountInput } from '../calc.js';
 import { el, openModal, confirmDialog, toast, formatDate } from '../ui.js';
 import { getSelectedMonth, onMonthChange } from '../monthNav.js';
@@ -55,6 +55,9 @@ export function renderTransactions(root) {
   groupRow.appendChild(groupToggle);
   container.appendChild(groupRow);
 
+  const totalsBar = el('div', { class: 'totals-bar tabular-nums' });
+  container.appendChild(totalsBar);
+
   const list = el('div', { class: 'list' });
   container.appendChild(list);
 
@@ -77,11 +80,19 @@ export function renderTransactions(root) {
     draw();
   });
 
-  unsubscribe = onMonthChange(() => draw());
+  unsubscribe = onMonthChange(() => {
+    if (!container.isConnected) {
+      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+      return;
+    }
+    draw();
+  });
 
   function draw() {
     const key = getSelectedMonth();
-    updateState(draft => { ensureMonth(draft, key); generateMonthTransactions(draft, key); return draft; });
+    if (monthNeedsGeneration(getState(), key)) {
+      updateState(draft => { generateMonthTransactions(draft, key); return draft; });
+    }
     drawFilterState();
 
     const state = getState();
@@ -94,6 +105,13 @@ export function renderTransactions(root) {
     if (statusFilter === 'paid') txns = txns.filter(t => t.paid);
     if (ownerFilter !== 'all') txns = txns.filter(t => t.owner === ownerFilter);
     txns.sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
+
+    // Totals for the currently visible (filtered) set.
+    const planned = txns.reduce((s, t) => s + txnPlannedEur(t, month.exchangeRate), 0);
+    const paid = txns.filter(t => t.paid).reduce((s, t) => s + txnAmountEur(t, month.exchangeRate), 0);
+    totalsBar.textContent = txns.length
+      ? `${txns.length} ჩანაწერი · გეგმა: ${formatMoney(planned, 'EUR')} · გადახდილია: ${formatMoney(paid, 'EUR')}`
+      : '';
 
     list.innerHTML = '';
     if (txns.length === 0) {

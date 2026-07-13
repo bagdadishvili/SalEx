@@ -38,7 +38,11 @@ export function openModal(bodyEl, { title = '', onClose } = {}) {
   overlay.appendChild(modal);
   root.appendChild(overlay);
 
+  let closed = false;
   function close() {
+    if (closed) return;
+    closed = true;
+    document.removeEventListener('keydown', escHandler);
     overlay.remove();
     if (onClose) onClose();
   }
@@ -46,9 +50,9 @@ export function openModal(bodyEl, { title = '', onClose } = {}) {
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) close();
   });
-  const escHandler = (e) => {
-    if (e.key === 'Escape') { close(); document.removeEventListener('keydown', escHandler); }
-  };
+  function escHandler(e) {
+    if (e.key === 'Escape') close();
+  }
   document.addEventListener('keydown', escHandler);
 
   return { close, modal };

@@ -4,7 +4,8 @@ import { getState, updateState, FREE_BUCKET_ID } from '../state.js';
 import { isTemplateDueInMonth, gelToEur, formatMoney, parseAmountInput } from '../calc.js';
 import { el, openModal, confirmDialog, toast, formatDate } from '../ui.js';
 import { monthKey } from '../state.js';
-import { getSelectedMonth } from '../monthNav.js';
+import { getSelectedMonth, setSelectedMonth, monthLabel } from '../monthNav.js';
+import { navigate } from '../app.js';
 import { bucketChip } from '../components.js';
 
 function bucketOfCategory(state, category) {
@@ -42,8 +43,27 @@ export function renderTemplates(root) {
 
   const header = el('div', { class: 'btn-row' });
   const addBtn = el('button', { class: 'btn btn--primary', text: '+ ახალი შაბლონი' });
-  header.appendChild(addBtn);
+
+  // One-tap "prepare next month": jump to next month — transactions generate
+  // there automatically from active templates and stay editable until paid.
+  const nextKey = (() => {
+    const [y, m] = monthKey().split('-').map(Number);
+    const idx = y * 12 + (m - 1) + 1;
+    return `${Math.floor(idx / 12)}-${String((idx % 12) + 1).padStart(2, '0')}`;
+  })();
+  const nextBtn = el('button', { class: 'btn btn--secondary', text: `📅 ${monthLabel(nextKey)}-ის მომზადება` });
+  nextBtn.addEventListener('click', () => {
+    setSelectedMonth(nextKey);
+    navigate('transactions');
+    toast(`${monthLabel(nextKey)} დაგენერირდა შაბლონებიდან — შეგიძლია შეცვალო ან დაამატო ✓`);
+  });
+
+  header.append(addBtn, nextBtn);
   container.appendChild(header);
+  container.appendChild(el('p', {
+    class: 'card__sub',
+    text: 'შაბლონები ავტომატურად იქცევა ტრანზაქციებად, როგორც კი თვეზე გადახვალ (აქტიური შაბლონებიდან, ციკლის მიხედვით). გენერირებული ტრანზაქციები თავისუფლად რედაქტირდება გადახდამდე.'
+  }));
 
   const list = el('div', { class: 'list' });
   container.appendChild(list);
@@ -76,7 +96,7 @@ export function renderTemplates(root) {
           el('span', { class: 'chip', text: cycleLabel }),
           el('span', { class: 'chip', text: ownerLabel })
         ]),
-        el('div', { class: 'row__meta', text: nextMonth ? `შემდეგი: ${nextMonth}` : (tpl.active ? '' : 'გამორთულია') })
+        el('div', { class: 'row__meta', text: nextMonth ? `შემდეგი: ${monthLabel(nextMonth)}` : (tpl.active ? '' : 'გამორთულია') })
       ]);
 
       const amount = el('div', { class: 'row__amount tabular-nums' }, [

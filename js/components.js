@@ -18,6 +18,11 @@ export function renderMonthNav(onChange) {
   for (let y = thisYear - YEAR_RANGE_BACK; y <= thisYear + YEAR_RANGE_FWD; y++) {
     yearSelect.appendChild(el('option', { value: String(y), text: String(y) }));
   }
+  // If the selected month's year fell outside the default range, add it so the select stays accurate.
+  if (![...yearSelect.options].some(o => o.value === String(curY))) {
+    const opt = el('option', { value: String(curY), text: String(curY) });
+    curY < thisYear - YEAR_RANGE_BACK ? yearSelect.prepend(opt) : yearSelect.appendChild(opt);
+  }
   yearSelect.value = String(curY);
 
   const monthSelect = el('select', { class: 'month-nav__select', 'aria-label': 'თვე' });

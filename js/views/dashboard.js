@@ -1,8 +1,8 @@
 // views/dashboard.js — compact dashboard cards, driven by the user's configured buckets.
 
-import { getState, updateState, ensureMonth } from '../state.js';
-import { generateMonthTransactions } from '../monthEngine.js';
-import { computeDashboard, computePlanVsActual, formatMoney, formatPercent, parseAmountInput } from '../calc.js';
+import { getState, updateState } from '../state.js';
+import { generateMonthTransactions, monthNeedsGeneration } from '../monthEngine.js';
+import { computeDashboard, computePlanVsActual, computeMonthTotals, formatMoney, formatPercent, parseAmountInput } from '../calc.js';
 import { el, savedToast } from '../ui.js';
 import { getSelectedMonth, onMonthChange } from '../monthNav.js';
 import { renderMonthNav } from '../components.js';
@@ -21,15 +21,22 @@ export function renderDashboard(root) {
   const cardsWrap = el('div', { class: 'card-grid' });
   container.appendChild(cardsWrap);
 
-  unsubscribe = onMonthChange(() => draw());
+  unsubscribe = onMonthChange(() => {
+    // View was replaced by another route — stop listening instead of drawing into detached DOM.
+    if (!container.isConnected) {
+      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+      return;
+    }
+    draw();
+  });
 
   function ensureCurrentMonth() {
     const key = getSelectedMonth();
-    updateState(draft => {
-      ensureMonth(draft, key);
-      generateMonthTransactions(draft, key);
-      return draft;
-    });
+    // Only touch state when something would actually change — avoids bumping
+    // updatedAt (and triggering sync pushes) on every render.
+    if (monthNeedsGeneration(getState(), key)) {
+      updateState(draft => { generateMonthTransactions(draft, key); return draft; });
+    }
     return key;
   }
 
@@ -42,7 +49,7 @@ export function renderDashboard(root) {
     const pva = computePlanVsActual(month, categories, settings);
 
     cardsWrap.innerHTML = '';
-    const order = settings.dashboardCardOrder.length ? settings.dashboardCardOrder : ['income', 'rate', 'georgia', 'buckets', 'free', 'planVsActual'];
+    const order = settings.dashboardCardOrder.length ? settings.dashboardCardOrder : ['summary', 'income', 'rate', 'georgia', 'buckets', 'free', 'planVsActual'];
     const ctx = { month, key, dash, pva, categories, settings, rerender: draw };
 
     order.forEach(cardKey => {
@@ -68,6 +75,7 @@ function inlineNumberField(value, onCommit) {
   const commit = () => {
     const parsed = parseAmountInput(input.value);
     if (parsed < 0) { input.value = (value ?? 0).toFixed(2).replace('.', ','); return; }
+    if (Math.abs(parsed - (value ?? 0)) < 0.005) return; // unchanged — no save/toast spam
     onCommit(parsed);
   };
   input.addEventListener('blur', commit);
@@ -83,9 +91,12 @@ function progressBar(pct, color) {
   return bar;
 }
 
-function statCard({ label, value, sub, pct, color, accentBorder = true }) {
-  const card = el('div', { class: 'card stat-card', style: accentBorder && color ? `border-left:4px solid ${color}` : '' });
-  card.appendChild(el('div', { class: 'stat-card__label', text: label }));
+function statCard({ label, value, sub, pct, color, accentBorder = true, wide = false }) {
+  const card = el('div', {
+    class: 'card stat-card' + (wide ? ' stat-card--wide' : ''),
+    style: accentBorder && color ? `border-left:4px solid ${color}` : ''
+  });
+  card.appendChild(el('div', { class: 'stat-card__label', text: label, title: label }));
   card.appendChild(el('div', { class: 'stat-card__value tabular-nums', text: value }));
   if (sub) card.appendChild(el('div', { class: 'stat-card__sub', text: sub }));
   if (pct !== undefined) card.appendChild(progressBar(pct, color));
@@ -94,8 +105,34 @@ function statCard({ label, value, sub, pct, color, accentBorder = true }) {
 
 // ---------------- Card renderers ----------------
 
+function summaryCard({ month, dash }) {
+  const totals = computeMonthTotals(month);
+  const pct = totals.planned > 0 ? Math.min(100, (totals.paid / totals.planned) * 100) : 0;
+  const card = el('div', { class: 'card stat-card stat-card--wide' });
+  card.appendChild(el('div', { class: 'stat-card__label', text: 'თვის მიმოხილვა' }));
+
+  const grid = el('div', { class: 'summary-grid' });
+  grid.appendChild(summaryCell('დაგეგმილი', formatMoney(totals.planned, 'EUR')));
+  grid.appendChild(summaryCell('გადახდილი', formatMoney(totals.paid, 'EUR')));
+  grid.appendChild(summaryCell(
+    totals.unpaidCount > 0 ? `დარჩა (${totals.unpaidCount})` : 'დარჩა',
+    formatMoney(totals.unpaid, 'EUR')
+  ));
+  grid.appendChild(summaryCell('ფაქტ. დანაზოგი', formatMoney(dash.savings.actual, 'EUR')));
+  card.appendChild(grid);
+  card.appendChild(progressBar(pct));
+  return card;
+}
+
+function summaryCell(label, value) {
+  return el('div', { class: 'summary-grid__cell' }, [
+    el('div', { class: 'stat-card__sub', text: label }),
+    el('div', { class: 'summary-grid__value tabular-nums', text: value })
+  ]);
+}
+
 function incomeCard({ month, key, rerender }) {
-  const card = el('div', { class: 'card stat-card' });
+  const card = el('div', { class: 'card stat-card stat-card--wide' });
   card.appendChild(el('div', { class: 'stat-card__label', text: 'შემოსავალი' }));
   const row = el('div', { class: 'field-row', style: 'margin:2px 0' });
   row.appendChild(el('div', { class: 'field', style: 'margin-bottom:0' }, [
@@ -157,22 +194,29 @@ function bucketsBlock({ dash }) {
 }
 
 function freeCard({ dash }) {
-  const card = el('div', { class: 'card stat-card' });
+  const card = el('div', { class: 'card stat-card stat-card--wide' });
   card.appendChild(el('div', { class: 'stat-card__label', text: 'თავისუფალი თანხა' }));
   card.appendChild(el('div', { class: 'stat-card__value tabular-nums', text: formatMoney(dash.free.total, 'EUR') }));
-  const split = el('div', { class: 'field-row', style: 'margin-top:4px;gap:8px' });
-  split.appendChild(el('div', { style: `flex:1;border-left:3px solid ${dash.free.giorgi.color};padding-left:6px` }, [
-    el('div', { class: 'stat-card__sub', text: 'გიორგი' }),
-    el('div', { class: 'tabular-nums', style: 'font-weight:700;font-size:0.9rem', text: formatMoney(dash.free.giorgi.share, 'EUR') }),
-    el('div', { class: 'stat-card__sub', text: formatPercent(dash.free.giorgi.pct) })
-  ]));
-  split.appendChild(el('div', { style: `flex:1;border-left:3px solid ${dash.free.nino.color};padding-left:6px` }, [
-    el('div', { class: 'stat-card__sub', text: 'ნინო' }),
-    el('div', { class: 'tabular-nums', style: 'font-weight:700;font-size:0.9rem', text: formatMoney(dash.free.nino.share, 'EUR') }),
-    el('div', { class: 'stat-card__sub', text: formatPercent(dash.free.nino.pct) })
-  ]));
+  const split = el('div', { class: 'free-split' });
+  split.appendChild(freePersonBlock('გიორგი', dash.free.giorgi));
+  split.appendChild(freePersonBlock('ნინო', dash.free.nino));
   card.appendChild(split);
   return card;
+}
+
+function freePersonBlock(label, person) {
+  const spentPct = person.share > 0 ? Math.min(100, (person.spent / person.share) * 100) : (person.spent > 0 ? 100 : 0);
+  const over = person.remaining < -0.005;
+  const block = el('div', { class: 'free-split__person', style: `border-left:3px solid ${person.color}` }, [
+    el('div', { class: 'stat-card__sub', text: `${label} · ${formatPercent(person.pct)}` }),
+    el('div', { class: 'free-split__share tabular-nums', text: formatMoney(person.share, 'EUR') }),
+    el('div', {
+      class: 'stat-card__sub tabular-nums' + (over ? ' text-danger' : ''),
+      text: `დახარჯულია ${formatMoney(person.spent, 'EUR')} · დარჩა ${formatMoney(person.remaining, 'EUR')}`
+    })
+  ]);
+  block.appendChild(progressBar(spentPct, over ? 'var(--danger)' : person.color));
+  return block;
 }
 
 function planVsActualCard({ pva }) {
@@ -249,6 +293,7 @@ function renderDonut(pva) {
 }
 
 const CARD_RENDERERS = {
+  summary: summaryCard,
   income: incomeCard,
   rate: rateCard,
   georgia: georgiaCard,

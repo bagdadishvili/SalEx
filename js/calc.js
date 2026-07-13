@@ -110,6 +110,21 @@ export function computeDashboard(month, categories, settings) {
   };
 }
 
+/** Month-level totals across ALL transactions: planned, paid (actual), and what's left unpaid. */
+export function computeMonthTotals(month) {
+  let planned = 0, paid = 0, unpaid = 0, unpaidCount = 0;
+  month.transactions.forEach(t => {
+    planned += txnPlannedEur(t, month.exchangeRate);
+    if (t.paid) {
+      paid += txnAmountEur(t, month.exchangeRate);
+    } else {
+      unpaid += txnPlannedEur(t, month.exchangeRate);
+      unpaidCount += 1;
+    }
+  });
+  return { planned, paid, unpaid, unpaidCount, count: month.transactions.length };
+}
+
 /** Plan-vs-actual rows: one per user bucket, plus the two free-money person splits. */
 export function computePlanVsActual(month, categories, settings) {
   const T = totalIncome(month);
@@ -222,6 +237,13 @@ export function runSelfChecks() {
   const essentialsRow = pva.find(r => r.key === 'bucket_essentials');
   assertClose('plan-vs-actual essentials % == 65 (650/1000)', essentialsRow.actual, 65, 0.1);
   assertEq('plan-vs-actual essentials at target -> ok', essentialsRow.ok, true);
+
+  // Month totals: planned = 650 + 300/3 = 750; paid = 650; unpaid = 100 (1 txn).
+  const totals = computeMonthTotals(month);
+  assertClose('totals planned == 750', totals.planned, 750, 0.01);
+  assertClose('totals paid == 650', totals.paid, 650, 0.01);
+  assertClose('totals unpaid == 100', totals.unpaid, 100, 0.01);
+  assertEq('totals unpaidCount == 1', totals.unpaidCount, 1);
 
   const passed = results.filter(r => r.pass).length;
   const failed = results.filter(r => !r.pass);

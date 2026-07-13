@@ -71,6 +71,18 @@ export function generateMonthTransactions(draft, key) {
   return month;
 }
 
+/**
+ * True if opening this month would actually change state (month missing, or an
+ * active template is due but not yet materialized). Lets views avoid useless
+ * updateState() calls on every render (which would bump updatedAt and trigger sync pushes).
+ */
+export function monthNeedsGeneration(state, key) {
+  const month = state.months[key];
+  if (!month) return true;
+  const existing = new Set(month.transactions.filter(t => t.templateId).map(t => t.templateId));
+  return state.templates.some(t => t.active && !existing.has(t.id) && isTemplateDueInMonth(t, key));
+}
+
 /** Navigates to (creates + generates) a month, returns the month key. Use on app load / month nav. */
 export function ensureMonthGenerated(draft, key) {
   initMonth(draft, key);

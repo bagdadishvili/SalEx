@@ -1,6 +1,6 @@
 // app.js — entry point + router.
 
-import { loadState, getState } from './state.js';
+import { loadState, getState, updateState } from './state.js';
 import { runSelfChecks } from './calc.js';
 import { initAutoSync } from './sync.js';
 import { renderDashboard } from './views/dashboard.js';
@@ -62,18 +62,36 @@ function hexToRgb(hex) {
 function checkBackupReminder() {
   const { settings } = getState();
   const banner = document.getElementById('backup-banner');
+  banner.hidden = true;
+
+  // Dismissed recently — stay quiet for 30 days.
+  if (settings.backupReminderDismissedAt) {
+    const d = (Date.now() - new Date(settings.backupReminderDismissedAt).getTime()) / 86400000;
+    if (d < 30) return;
+  }
+
+  let msg = null;
   if (!settings.lastBackupAt) {
-    banner.hidden = false;
-    banner.textContent = 'რჩევა: ჯერ არ გაქვთ გაკეთებული JSON ბექაფი — გააკეთეთ პარამეტრებში.';
-    return;
-  }
-  const days = (Date.now() - new Date(settings.lastBackupAt).getTime()) / 86400000;
-  if (days > 30) {
-    banner.hidden = false;
-    banner.textContent = `ბოლო ბექაფი იყო ${Math.floor(days)} დღის წინ — რეკომენდირებულია ახალი JSON ექსპორტი.`;
+    msg = 'რჩევა: ჯერ არ გაქვთ გაკეთებული JSON ბექაფი — გააკეთეთ პარამეტრებში.';
   } else {
-    banner.hidden = true;
+    const days = (Date.now() - new Date(settings.lastBackupAt).getTime()) / 86400000;
+    if (days > 30) msg = `ბოლო ბექაფი იყო ${Math.floor(days)} დღის წინ — რეკომენდირებულია ახალი JSON ექსპორტი.`;
   }
+  if (!msg) return;
+
+  banner.innerHTML = '';
+  const span = document.createElement('span');
+  span.textContent = msg;
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'banner-close';
+  closeBtn.setAttribute('aria-label', 'შეხსენების დახურვა');
+  closeBtn.textContent = '✕';
+  closeBtn.addEventListener('click', () => {
+    updateState(draft => { draft.settings.backupReminderDismissedAt = new Date().toISOString(); return draft; });
+    banner.hidden = true;
+  });
+  banner.append(span, closeBtn);
+  banner.hidden = false;
 }
 
 function init() {
