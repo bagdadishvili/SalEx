@@ -1,0 +1,65 @@
+# Fetches Bank of Georgia's commercial EUR rate every 30 minutes (08:00–23:30 Tbilisi time)
+# and publishes it as rates.json on the separate branch "rates" (one commit, force-pushed,
+# so history never grows). The app reads it from raw.githubusercontent.com, which — unlike
+# the bank's own API — allows browser access (CORS).
+name: Bank of Georgia EUR rate
+
+on:
+  schedule:
+    - cron: '*/30 4-19 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rates
+  cancel-in-progress: true
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fetch rates
+        run: |
+          set -euo pipefail
+          bog=$(curl -fsS --retry 3 --retry-delay 5 --max-time 20 https://api.businessonline.ge/api/rates/commercial/EUR)
+          nbg=$(curl -fsS --retry 2 --max-time 20 'https://nbg.gov.ge/gw/api/ct/monetarypolicy/currencies/en/json/?currencies=EUR' || echo 'null')
+          python3 - "$bog" "$nbg" << 'PY'
+          import json, sys, datetime
+          bog = json.loads(sys.argv[1])
+          try:
+              nbg = json.loads(sys.argv[2])
+          except Exception:
+              nbg = None
+          official = None
+          if isinstance(nbg, list) and nbg:
+              cur = [c for c in nbg[0].get('currencies', []) if c.get('code') == 'EUR']
+              if cur:
+                  official = round(float(cur[0]['rate']) / float(cur[0].get('quantity') or 1), 4)
+          out = {
+              'source': 'Bank of Georgia (commercial)',
+              'currency': 'EUR',
+              'buy': round(float(bog['Buy']), 4),
+              'sell': round(float(bog['Sell']), 4),
+              'official': official,
+              'fetchedAt': datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
+          }
+          assert 1 < out['buy'] < 10 and 1 < out['sell'] < 10, out
+          with open('rates.json', 'w') as f:
+              json.dump(out, f, indent=1)
+          print(out)
+          PY
+
+      - name: Publish to branch "rates"
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git init -q -b rates
+          git config user.name "rates-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add rates.json
+          git commit -q -m "EUR rate $(date -u +%FT%TZ)"
+          git push -q -f "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" rates
