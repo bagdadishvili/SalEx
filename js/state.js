@@ -5,7 +5,7 @@ import { saveSnapshot, summarizeState } from './backup.js';
 import { stampChanges, restampAll, fillMissingStamps, EPOCH } from './records.js';
 
 const STORAGE_KEY = 'familyBudget.v1';
-const CURRENT_VERSION = 4;
+const CURRENT_VERSION = 5;
 const SAVE_DEBOUNCE_MS = 300;
 const FREE_BUCKET_ID = 'free';
 // A freshly seeded (never edited) state carries this timestamp, so it can never look
@@ -47,6 +47,8 @@ function seedState() {
       // 'actual' = transfer exactly the planned bills; 'plan' = transfer the category % of income.
       contributionBasis: 'actual',
       rateAuto: true,
+      hiddenCards: [],          // dashboard blocks the user switched off
+      newMonthMode: 'wizard',   // 'wizard' = show the month-preparation screen; 'auto' = fill silently
       _u: EPOCH,
       planFree: {
         giorgi: { percent: 5, color: '#7c3aed' },
@@ -60,7 +62,6 @@ function seedState() {
     // another category's id = its amounts are included in that category's card.
     categories: [
       { id: 'cat_essentials', name: 'აუცილებელი', percent: 65, color: '#2563eb', goalType: 'max', georgiaTransfer: false, parentId: null, _u: EPOCH },
-      { id: 'cat_georgia', name: 'საქართველოში გადასარიცხი', percent: 0, color: '#d97706', goalType: 'max', georgiaTransfer: true, parentId: 'cat_essentials', _u: EPOCH },
       { id: 'cat_savings', name: 'დანაზოგი', percent: 25, color: '#16a34a', goalType: 'min', georgiaTransfer: false, parentId: null, _u: EPOCH },
       { id: 'cat_other', name: 'სხვა', percent: 0, color: '#94a3b8', goalType: 'max', georgiaTransfer: false, parentId: FREE_BUCKET_ID, _u: EPOCH }
     ],
@@ -150,6 +151,67 @@ function migrateV2ToV3(raw) {
   return raw;
 }
 
+/**
+ * v5: "to Georgia" becomes a flag on each template/transaction (independent of whether the
+ * expense is essential or not), and "who pays" is one field (account; owner mirrors it).
+ * Items of a Georgia-only sub-category move to its parent category with the flag set, and the
+ * now-empty sub-category is removed. Every record changed here gets a fresh stamp, so the
+ * migrated version wins when merged with a not-yet-updated device.
+ */
+function migrateV4ToV5(raw) {
+  const now = new Date().toISOString();
+  const cats = Array.isArray(raw.categories) ? raw.categories : [];
+  const byId = new Map(cats.map(c => [c.id, c]));
+  const geoCats = new Set(cats.filter(c => c.georgiaTransfer).map(c => c.id));
+  const topOf = (id) => {
+    let c = byId.get(id), guard = 0;
+    while (c && c.parentId && c.parentId !== FREE_BUCKET_ID && guard++ < 10) {
+      const p = byId.get(c.parentId);
+      if (!p) break;
+      c = p;
+    }
+    return c;
+  };
+  // A Georgia-only sub-category hands its items to its parent (if the parent is a real category).
+  const redirect = {};
+  geoCats.forEach(id => {
+    const c = byId.get(id);
+    if (c.parentId && c.parentId !== FREE_BUCKET_ID && byId.has(c.parentId)) redirect[id] = c.parentId;
+  });
+  const fix = (item) => {
+    const before = JSON.stringify(item);
+    if (geoCats.has(item.categoryId)) item.toGeorgia = true;
+    else item.toGeorgia = !!item.toGeorgia;
+    if (redirect[item.categoryId]) item.categoryId = redirect[item.categoryId];
+    const top = topOf(item.categoryId);
+    const isFree = !!top && top.parentId === FREE_BUCKET_ID;
+    if (isFree && (!item.account || item.account === 'shared') && item.owner && item.owner !== 'shared') item.account = item.owner;
+    if (!item.account) item.account = 'shared';
+    item.owner = item.account;
+    if (JSON.stringify(item) !== before) item._u = now;
+  };
+  (raw.templates || []).forEach(fix);
+  Object.values(raw.months || {}).forEach(m => (m.transactions || []).forEach(fix));
+
+  if (!raw.deleted || typeof raw.deleted !== 'object') raw.deleted = {};
+  const used = new Set();
+  (raw.templates || []).forEach(t => used.add(t.categoryId));
+  Object.values(raw.months || {}).forEach(m => (m.transactions || []).forEach(t => used.add(t.categoryId)));
+  raw.categories = cats.filter(c => {
+    if (redirect[c.id] && !used.has(c.id) && !cats.some(x => x.parentId === c.id)) {
+      raw.deleted[c.id] = now;
+      return false;
+    }
+    return true;
+  });
+  raw.categories.forEach(c => { if (c.georgiaTransfer) { c.georgiaTransfer = false; c._u = now; } });
+  if (raw.settings && Array.isArray(raw.settings.dashboardCardOrder)) {
+    raw.settings.dashboardCardOrder = raw.settings.dashboardCardOrder.filter(k => !raw.deleted[k]);
+  }
+  raw.version = 5;
+  return raw;
+}
+
 /** v4: payment account on templates/transactions + per-record change stamps (for merge sync). */
 function migrateV3ToV4(raw) {
   (raw.templates || []).forEach(t => { if (!t.account) t.account = 'shared'; });
@@ -174,6 +236,9 @@ function migrate(raw) {
   if (raw.version < 4) {
     raw = migrateV3ToV4(raw);
   }
+  if (raw.version < 5) {
+    raw = migrateV4ToV5(raw);
+  }
 
   // Ensure required top-level shape even if partially corrupted.
   const seed = seedState();
@@ -188,6 +253,8 @@ function migrate(raw) {
   if (!['proportional', 'equal'].includes(raw.settings.contributionSplit)) raw.settings.contributionSplit = 'proportional';
   if (!['actual', 'plan'].includes(raw.settings.contributionBasis)) raw.settings.contributionBasis = 'actual';
   if (typeof raw.settings.rateAuto !== 'boolean') raw.settings.rateAuto = true;
+  if (!Array.isArray(raw.settings.hiddenCards)) raw.settings.hiddenCards = [];
+  if (!['wizard', 'auto'].includes(raw.settings.newMonthMode)) raw.settings.newMonthMode = 'wizard';
   raw.categories = Array.isArray(raw.categories) && raw.categories.length ? raw.categories : seed.categories;
   raw.categories.forEach(c => {
     if (typeof c.percent !== 'number') c.percent = 0;
@@ -200,13 +267,19 @@ function migrate(raw) {
   raw.months = raw.months && typeof raw.months === 'object' ? raw.months : {};
   // Drop malformed month keys (an old bug could create e.g. "[object Object]").
   Object.keys(raw.months).forEach(k => {
-    if (!/^\d{4}-\d{2}$/.test(k)) { delete raw.months[k]; return; }
+    if (!/^\d{4}-\d{2}$/.test(k)) {
+      // Never silently drop data: park a malformed month instead of deleting it.
+      raw.quarantine = raw.quarantine || {};
+      raw.quarantine[k] = raw.months[k];
+      delete raw.months[k];
+      return;
+    }
     const m = raw.months[k];
     if (!Array.isArray(m.transactions)) m.transactions = [];
     if (!Array.isArray(m.skipTemplates)) m.skipTemplates = [];
-    m.transactions.forEach(t => { if (!t.account) t.account = 'shared'; });
+    m.transactions.forEach(t => { if (!t.account) t.account = 'shared'; if (!t.owner) t.owner = t.account; t.toGeorgia = !!t.toGeorgia; });
   });
-  raw.templates.forEach(t => { if (!t.account) t.account = 'shared'; });
+  raw.templates.forEach(t => { if (!t.account) t.account = 'shared'; if (!t.owner) t.owner = t.account; t.toGeorgia = !!t.toGeorgia; });
   fillMissingStamps(raw, raw.updatedAt || EPOCH);
   // New dashboard card: month summary (added later, keep existing user order intact).
   if (!raw.settings.dashboardCardOrder.includes('summary')) {
@@ -215,6 +288,14 @@ function migrate(raw) {
   if (!raw.updatedAt) raw.updatedAt = PRISTINE_UPDATED_AT;
   raw.version = CURRENT_VERSION;
   return raw;
+}
+
+/**
+ * Brings data from elsewhere (cloud copy, old backup) to the current format WITHOUT touching
+ * the app state — so a merge always compares like with like.
+ */
+export function upgradeState(raw) {
+  return migrate(deepClone(raw));
 }
 
 function deepClone(obj) {
@@ -233,6 +314,13 @@ export function loadState() {
     // Never silently destroy unreadable data — park it under a separate key first.
     try { if (text) localStorage.setItem(`${STORAGE_KEY}.corrupt-${Date.now()}`, text); } catch { /* quota */ }
     raw = null;
+  }
+  if (raw && (raw.version || 1) < CURRENT_VERSION) {
+    // App update with a data-format change: keep the untouched old data twice before
+    // converting — a one-time copy in localStorage and a restore point in IndexedDB.
+    const backupKey = `${STORAGE_KEY}.before-v${CURRENT_VERSION}`;
+    try { if (!localStorage.getItem(backupKey)) localStorage.setItem(backupKey, text); } catch { /* quota — IndexedDB copy below */ }
+    try { saveSnapshot(JSON.parse(text), 'before-update'); } catch { /* ignore */ }
   }
   state = raw ? migrate(raw) : seedState();
   ensureMonth(monthKey());

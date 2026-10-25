@@ -7,9 +7,9 @@ import { monthLabelFull } from '../monthNav.js';
 import { txnAmountEur, txnPlannedEur, txnPaidEur, topIdOf, resolveTopCategory, formatMoney, parseAmountInput, isEnvelope, envelopeSpent, ACCOUNT_LABELS } from '../calc.js';
 import { openEnvelopeDialog } from '../envelope.js';
 import { fetchEurGelRate } from '../rates.js';
-import { el, openModal, confirmDialog, toast, formatDate } from '../ui.js';
+import { el, openModal, confirmDialog, toast, undoToast, formatDate } from '../ui.js';
 import { getSelectedMonth, onMonthChange } from '../monthNav.js';
-import { renderMonthNav, bucketChip, ownerChip, freePseudoCategory } from '../components.js';
+import { renderMonthNav, bucketChip, freePseudoCategory, payerChip, georgiaChip, categoryChips, categoryOptions, PAYER_LABELS } from '../components.js';
 
 function uid(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -54,7 +54,7 @@ export function renderTransactions(root) {
 
   const ownerRow = el('div', { class: 'filter-row' });
   const ownerBtns = {
-    all: filterBtn('ყველა', () => setOwnerFilter('all')),
+    all: filterBtn('👤 ყველა', () => setOwnerFilter('all')),
     giorgi: filterBtn('გიორგი', () => setOwnerFilter('giorgi')),
     nino: filterBtn('ნინო', () => setOwnerFilter('nino')),
     shared: filterBtn('საერთო', () => setOwnerFilter('shared'))
@@ -99,11 +99,12 @@ export function renderTransactions(root) {
   function draw() {
     const key = getSelectedMonth();
     if (!getState().months[key]) updateState(draft => { initMonth(draft, key); return draft; });
-    if (monthIsPrepared(getState(), key) && monthNeedsGeneration(getState(), key)) {
+    const auto = getState().settings.newMonthMode === 'auto';
+    if ((auto || monthIsPrepared(getState(), key)) && monthNeedsGeneration(getState(), key)) {
       updateState(draft => { generateMonthTransactions(draft, key); return draft; });
     }
     prepBanner.innerHTML = '';
-    if (!monthIsPrepared(getState(), key) && getState().templates.length) {
+    if (!auto && !monthIsPrepared(getState(), key) && getState().templates.length) {
       const p = preparationPreview(getState(), key);
       const btn = el('button', { class: 'btn btn--primary', type: 'button', text: '📅 მომზადება' });
       btn.addEventListener('click', () => openPrepareWizard(key, () => draw()));
@@ -125,7 +126,7 @@ export function renderTransactions(root) {
     const isOpen = (t) => !t.paid; // envelopes count as open until closed for the month
     if (statusFilter === 'unpaid') txns = txns.filter(isOpen);
     if (statusFilter === 'paid') txns = txns.filter(t => t.paid || (isEnvelope(t) && envelopeSpent(t) > 0));
-    if (ownerFilter !== 'all') txns = txns.filter(t => t.owner === ownerFilter);
+    if (ownerFilter !== 'all') txns = txns.filter(t => (t.account || 'shared') === ownerFilter);
     txns.sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
 
     // Totals for the currently visible (filtered) set.
@@ -178,10 +179,9 @@ function txnRow(txn, month, categories, refresh) {
   const main = el('div', { class: 'row__main' }, [
     el('div', { class: 'row__name', text: txn.name }),
     el('div', { class: 'row__meta' }, [
-      bucketChip(bucket),
-      category?.georgiaTransfer ? el('span', { class: 'chip chip--georgia', text: '🇬🇪' }) : null,
-      ownerChip(txn.owner),
-      txn.account && txn.account !== 'shared' ? el('span', { class: 'chip chip--account', text: `🏦 ${ACCOUNT_LABELS[txn.account].replace(' ანგარიში', '')}` }) : null,
+      ...categoryChips(categories, txn.categoryId),
+      txn.toGeorgia || category?.georgiaTransfer ? georgiaChip() : null,
+      payerChip(txn.account),
       envelope ? el('span', { class: 'chip', text: '🛒 ბიუჯეტი' }) : el('span', { text: formatDate(txn.dueDate) })
     ])
   ]);
@@ -246,6 +246,8 @@ function txnRow(txn, month, categories, refresh) {
   deleteBtn.addEventListener('click', async () => {
     const ok = await confirmDialog('წავშალო ეს ტრანზაქცია?', { danger: true, confirmLabel: 'წაშლა' });
     if (!ok) return;
+    const copy = JSON.parse(JSON.stringify(txn));
+    const monthOfTxn = monthKeyOf(month);
     updateState(draft => {
       const m = findMonthByTxnId(draft, txn.id);
       if (m) {
@@ -258,7 +260,18 @@ function txnRow(txn, month, categories, refresh) {
       }
       return draft;
     });
-    toast('წაიშალა');
+    undoToast('წაიშალა', () => {
+      updateState(draft => {
+        const m = draft.months[monthOfTxn];
+        if (!m || m.transactions.some(t => t.id === copy.id)) return draft;
+        delete copy._u;
+        m.transactions.push(copy);
+        if (copy.templateId) m.skipTemplates = (m.skipTemplates || []).filter(id => id !== copy.templateId);
+        return draft;
+      });
+      toast('დაბრუნდა ✓');
+      refresh();
+    });
     refresh();
   });
 
@@ -362,7 +375,9 @@ function openTransactionForm(existing, monthKeyStr, onSaved) {
   const form = el('form', {});
 
   const nameInput = el('input', { type: 'text', value: existing?.name || '' });
-  const categorySelect = el('select', {}, state.categories.map(c => el('option', { value: c.id, text: c.name })));
+  const categorySelect = categoryOptions(state.categories, existing?.categoryId);
+  const georgiaBox = el('input', { type: 'checkbox' });
+  georgiaBox.checked = !!existing?.toGeorgia;
   if (existing) categorySelect.value = existing.categoryId;
 
   const currencySelect = el('select', {}, [el('option', { value: 'EUR', text: 'EUR' }), el('option', { value: 'GEL', text: 'GEL' })]);
@@ -372,14 +387,9 @@ function openTransactionForm(existing, monthKeyStr, onSaved) {
 
   const dueDateInput = el('input', { type: 'date', value: existing?.dueDate || `${monthKeyStr}-01` });
 
-  const ownerSelect = el('select', {}, [
-    el('option', { value: 'shared', text: 'საერთო' }),
-    el('option', { value: 'giorgi', text: 'გიორგი' }),
-    el('option', { value: 'nino', text: 'ნინო' })
-  ]);
-  ownerSelect.value = existing?.owner || 'shared';
 
-  const accountSelect = el('select', {}, Object.entries(ACCOUNT_LABELS).map(([v, t]) => el('option', { value: v, text: t })));
+
+  const accountSelect = el('select', {}, Object.entries(PAYER_LABELS).map(([v, t]) => el('option', { value: v, text: v === 'shared' ? 'საერთო ანგარიში' : t })));
   accountSelect.value = existing?.account || 'shared';
 
   const noteInput = el('input', { type: 'text', value: existing?.note || '' });
@@ -392,10 +402,8 @@ function openTransactionForm(existing, monthKeyStr, onSaved) {
       el('div', { class: 'field' }, [el('label', { text: 'ვალუტა' }), currencySelect])
     ]),
     el('div', { class: 'field' }, [el('label', { text: 'ვადა' }), dueDateInput]),
-    el('div', { class: 'field-row' }, [
-      el('div', { class: 'field' }, [el('label', { text: 'ვისი ხარჯია' }), ownerSelect]),
-      el('div', { class: 'field' }, [el('label', { text: 'საიდან იხდება' }), accountSelect])
-    ]),
+    el('label', { class: 'field checkbox-field' }, [georgiaBox, el('span', { text: '📤 საქართველოში გადასარიცხი' })]),
+    el('div', { class: 'field' }, [el('label', { text: 'ვინ იხდის (ვისი ანგარიშიდან)' }), accountSelect]),
     el('div', { class: 'field' }, [el('label', { text: 'შენიშვნა' }), noteInput])
   );
 
@@ -417,13 +425,13 @@ function openTransactionForm(existing, monthKeyStr, onSaved) {
         const t = findTxn(draft, existing.id);
         Object.assign(t, {
           name, categoryId: categorySelect.value, currency: currencySelect.value,
-          amountPlanned: amount, dueDate: dueDateInput.value, owner: ownerSelect.value, account: accountSelect.value, note: noteInput.value
+          amountPlanned: amount, dueDate: dueDateInput.value, owner: accountSelect.value, account: accountSelect.value, toGeorgia: georgiaBox.checked, note: noteInput.value
         });
       } else {
         ensureMonth(draft, monthKeyStr);
         draft.months[monthKeyStr].transactions.push({
           id: uid('txn'), templateId: null, name, categoryId: categorySelect.value,
-          owner: ownerSelect.value, account: accountSelect.value, currency: currencySelect.value, amountPlanned: amount,
+          owner: accountSelect.value, account: accountSelect.value, toGeorgia: georgiaBox.checked, currency: currencySelect.value, amountPlanned: amount,
           amountActual: null, paid: false, paidAt: null, rateAtPayment: null,
           dueDate: dueDateInput.value, note: noteInput.value
         });

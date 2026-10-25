@@ -5,7 +5,7 @@ import { sumAllPercents, effectiveCardOrder } from '../calc.js';
 import { el, confirmDialog, toast, openModal } from '../ui.js';
 import { listSnapshots, getSnapshotData, saveSnapshot, summarizeState, SNAPSHOT_REASONS } from '../backup.js';
 import { exportJson, importJson, exportCsv, importCsv } from '../exporter.js';
-import { applyAppearance, checkBackupReminder } from '../app.js';
+import { applyAppearance, checkBackupReminder, APP_VERSION } from '../app.js';
 import { pickColor, COLOR_PRESETS } from '../components.js';
 import * as sync from '../sync.js';
 
@@ -41,6 +41,7 @@ export function renderSettings(root) {
   container.appendChild(renderRestore());
   container.appendChild(renderDataSection());
   container.appendChild(renderDangerZone());
+  container.appendChild(el('p', { class: 'version-note', text: `აპის ვერსია ${APP_VERSION} · მონაცემების ფორმატი v${getState().version}. აპის განახლება მონაცემებს არ შლის: ისინი ამ მოწყობილობაზე და ღრუბელშია, ფორმატის ცვლილებამდე კი ავტომატურად იქმნება აღდგენის წერტილი „აპის განახლებამდე".` }));
 }
 
 // ---------------- Percent plan (over unified categories) + free-money split ----------------
@@ -121,7 +122,7 @@ function renderBuckets() {
 function renderSplitSettings() {
   const state = getState();
   const card = el('div', { class: 'card' });
-  card.appendChild(el('div', { class: 'card__title', text: 'ხელფასის განაწილება და კურსი' }));
+  card.appendChild(el('div', { class: 'card__title', text: 'ახალი თვე, ხელფასის განაწილება და კურსი' }));
 
   const modeSelect = el('select', {}, [
     el('option', { value: 'proportional', text: 'ხელფასის პროპორციით (ორივე ერთნაირ % იხდის)' }),
@@ -145,6 +146,17 @@ function renderSplitSettings() {
   });
   card.appendChild(el('div', { class: 'field' }, [el('label', { text: 'რამდენი გადაირიცხოს აუცილებელ ხარჯზე' }), basisSelect]));
   card.appendChild(el('p', { class: 'card__sub', text: 'დეშბორდის „ხელფასის განაწილება" თითოეულს აჩვენებს: რამდენი გადარიცხოს საერთო ანგარიშზე, რამდენი დატოვოს საკუთარზე (თავისი ანგარიშიდან ჩამოჭრილი გადასახადებისთვის — წინ და უკან გადარიცხვა აღარ სჭირდება), რამდენი დანაზოგზე და რა რჩება თავისუფალი. ანგარიში თითო შაბლონში ირჩევა („საიდან იჭრება").' }));
+
+  const modeNew = el('select', {}, [
+    el('option', { value: 'wizard', text: '📅 მომზადების ფანჯრით — ჯერ ვნახავ სიას (რეკომენდებული)' }),
+    el('option', { value: 'auto', text: 'ავტომატურად — შაბლონები თავისით ემატება, შეხსენების გარეშე' })
+  ]);
+  modeNew.value = state.settings.newMonthMode || 'wizard';
+  modeNew.addEventListener('change', () => {
+    updateState(d => { d.settings.newMonthMode = modeNew.value; return d; });
+    toast('შენახულია ✓');
+  });
+  card.appendChild(el('div', { class: 'field' }, [el('label', { text: 'ახალი თვე როგორ შეივსოს' }), modeNew]));
 
   const autoBox = el('input', { type: 'checkbox' });
   autoBox.checked = state.settings.rateAuto !== false;
@@ -207,7 +219,7 @@ function renderAppearance() {
   fontRow.appendChild(fontSelect);
   card.appendChild(fontRow);
 
-  card.appendChild(el('label', { text: 'დეშბორდის ბლოკების თანმიმდევრობა', style: 'font-size:0.85rem;color:var(--text-muted);display:block;margin:16px 0 6px' }));
+  card.appendChild(el('label', { id: 'dashboard-layout', text: 'დეშბორდის ბლოკები — 👁 ჩვენება/დამალვა, ▲▼ თანმიმდევრობა', style: 'font-size:0.85rem;color:var(--text-muted);display:block;margin:16px 0 6px' }));
   const orderList = el('div', { class: 'order-list' });
   function moveCard(idx, delta) {
     updateState(draft => {
@@ -223,16 +235,28 @@ function renderAppearance() {
     const s = getState();
     const order = effectiveCardOrder(s.settings, s.categories);
     orderList.innerHTML = '';
+    const hidden = new Set(s.settings.hiddenCards || []);
     order.forEach((key, idx) => {
+      const isHidden = hidden.has(key);
+      const eye = el('button', { class: 'icon-btn order-list__eye', 'aria-pressed': String(!isHidden), 'aria-label': isHidden ? 'ჩვენება' : 'დამალვა', title: isHidden ? 'ჩვენება დეშბორდზე' : 'დამალვა დეშბორდიდან', text: isHidden ? '🚫' : '👁' });
+      eye.addEventListener('click', () => {
+        updateState(draft => {
+          const list = new Set(draft.settings.hiddenCards || []);
+          if (list.has(key)) list.delete(key); else list.add(key);
+          draft.settings.hiddenCards = [...list];
+          return draft;
+        });
+        drawOrder();
+      });
       const up = el('button', { class: 'icon-btn', 'aria-label': 'ზემოთ', text: '▲' });
       if (idx === 0) up.disabled = true;
       up.addEventListener('click', () => moveCard(idx, -1));
       const down = el('button', { class: 'icon-btn', 'aria-label': 'ქვემოთ', text: '▼' });
       if (idx === order.length - 1) down.disabled = true;
       down.addEventListener('click', () => moveCard(idx, 1));
-      orderList.appendChild(el('div', { class: 'order-list__item' }, [
+      orderList.appendChild(el('div', { class: 'order-list__item' + (isHidden ? ' order-list__item--hidden' : '') }, [
         el('span', { text: cardLabel(s, key) }),
-        el('div', { class: 'order-list__buttons' }, [up, down])
+        el('div', { class: 'order-list__buttons' }, [eye, up, down])
       ]));
     });
   }

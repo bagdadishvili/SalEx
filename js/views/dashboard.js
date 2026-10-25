@@ -9,7 +9,7 @@ import {
   effectiveCardOrder, totalIncome, formatMoney, formatPercent, parseAmountInput, isEnvelope, envelopeSpent, ACCOUNT_LABELS
 } from '../calc.js';
 import { el, savedToast, toast, formatDate } from '../ui.js';
-import { getSelectedMonth, setSelectedMonth, onMonthChange, MONTH_NAMES_SHORT } from '../monthNav.js';
+import { getSelectedMonth, setSelectedMonth, onMonthChange, MONTH_NAMES_SHORT, getUiPref, setUiPref } from '../monthNav.js';
 import { renderMonthNav } from '../components.js';
 import { fetchEurGelRate } from '../rates.js';
 import { openEnvelopeDialog } from '../envelope.js';
@@ -74,7 +74,9 @@ export function renderDashboard(root) {
     if (!getState().months[key]) updateState(draft => { initMonth(draft, key); return draft; });
     // Only a PREPARED month is topped up automatically (e.g. a template added later).
     // An unprepared month shows the preparation card instead — nothing appears silently.
-    if (monthIsPrepared(getState(), key) && monthNeedsGeneration(getState(), key)) {
+    // (Setting "new month: automatically" restores the old silent behaviour.)
+    const auto = getState().settings.newMonthMode === 'auto';
+    if ((auto || monthIsPrepared(getState(), key)) && monthNeedsGeneration(getState(), key)) {
       updateState(draft => { generateMonthTransactions(draft, key); return draft; });
     }
     return key;
@@ -89,8 +91,11 @@ export function renderDashboard(root) {
     const pva = computePlanVsActual(month, categories, settings);
 
     cardsWrap.innerHTML = '';
-    prepareCards(state, key, (k) => openPrepareWizard(k, () => goToMonth(k))).forEach(c => cardsWrap.appendChild(c));
-    const order = effectiveCardOrder(settings, categories);
+    if (settings.newMonthMode !== 'auto') {
+      prepareCards(state, key, (k) => openPrepareWizard(k, () => goToMonth(k)), draw).forEach(c => cardsWrap.appendChild(c));
+    }
+    const hidden = new Set(settings.hiddenCards || []);
+    const order = effectiveCardOrder(settings, categories).filter(k => !hidden.has(k));
     const ctx = { month, key, dash, pva, categories, settings, state, rerender: draw, goToMonth };
 
     order.forEach(cardKey => {
@@ -105,6 +110,12 @@ export function renderDashboard(root) {
       if (b) cardsWrap.appendChild(categoryCard(b));
     });
   }
+
+  const customize = el('div', { class: 'dash-customize' }, [
+    el('button', { class: 'btn btn--ghost btn--sm', type: 'button', text: '⚙️ ბლოკების დამალვა / გადაადგილება' })
+  ]);
+  customize.firstChild.addEventListener('click', () => { navigate('settings'); setTimeout(() => document.getElementById('dashboard-layout')?.scrollIntoView({ behavior: 'smooth' }), 50); });
+  container.appendChild(customize);
 
   /** Jump to another month (from the year table) and keep the selector in sync. */
   function goToMonth(k) {
@@ -416,31 +427,39 @@ function yearCard({ state, key, goToMonth }) {
   ]));
   card.appendChild(el('div', { class: 'year-table-wrap' }, [table]));
   if (t.georgia > 0) {
-    card.appendChild(el('div', { class: 'stat-card__sub', style: 'margin-top:6px', text: `🇬🇪 საქართველოში გადარიცხულია ${year}-ში: ${formatMoney(t.georgia, 'EUR')} (ხარჯის ნაწილია)` }));
+    card.appendChild(el('div', { class: 'stat-card__sub', style: 'margin-top:6px', text: `📤 საქართველოში გადარიცხულია ${year}-ში: ${formatMoney(t.georgia, 'EUR')} (ხარჯის ნაწილია)` }));
   }
   return card;
 }
 
 // ---------------- Month preparation prompts ----------------
 
-function prepareCards(state, key, open) {
+function prepareCards(state, key, open, redraw) {
   const cards = [];
   if (!state.templates.length) return cards;
   const cur = monthKey();
+  const dismissed = new Set(getUiPref('dismissedPrepare', []));
   const make = (k, title, sub, primary) => {
     const btn = el('button', { class: 'btn ' + (primary ? 'btn--primary' : 'btn--secondary'), type: 'button', text: '📅 მომზადება' });
     btn.addEventListener('click', () => open(k));
+    const closeBtn = el('button', { class: 'icon-btn icon-btn--sm prepare-card__close', type: 'button', 'aria-label': 'შეხსენების დამალვა ამ თვისთვის', title: 'დამალვა (ამ თვისთვის). სულ გამორთვა — პარამეტრებში', text: '✕' });
+    closeBtn.addEventListener('click', () => {
+      setUiPref('dismissedPrepare', [...dismissed, k].slice(-24));
+      toast('დაიმალა. „📅 თვის მომზადება" ისევ ხელმისაწვდომია „ტრანზაქციების" გვერდზე; სულ გამორთვა — პარამეტრებში.');
+      redraw();
+    });
     return el('div', { class: 'card stat-card stat-card--wide prepare-card' + (primary ? ' prepare-card--main' : '') }, [
       el('div', { class: 'prepare-card__text' }, [el('div', { class: 'prepare-card__title', text: title }), el('div', { class: 'stat-card__sub', text: sub })]),
-      btn
+      btn,
+      closeBtn
     ]);
   };
   const p = preparationPreview(state, key);
-  if (!p.prepared) {
+  if (!p.prepared && !dismissed.has(key)) {
     cards.push(make(key, `📅 ${monthLabelFull(key)} ჯერ არ არის მომზადებული`,
       p.count ? `${p.count} ხარჯი შაბლონებიდან ≈ ${formatMoney(p.total, 'EUR', 0)}. ნახე სია, შეცვალე რაც საჭიროა და შექმენი ერთი დაჭერით.` : 'ამ თვეში შაბლონები არ მოდის — მაინც შეგიძლია ჩაწერო ხელფასი და კურსი.',
       true));
-  } else if (key !== cur && !monthIsPrepared(state, cur)) {
+  } else if (key !== cur && !monthIsPrepared(state, cur) && !dismissed.has(cur)) {
     const pc = preparationPreview(state, cur);
     cards.push(make(cur, `🗓 ${monthLabel(cur)} დაიწყო`, `${pc.count} ხარჯი ≈ ${formatMoney(pc.total, 'EUR', 0)} ელოდება მომზადებას.`, false));
   }
@@ -467,7 +486,7 @@ function dueCard({ month }) {
   card.appendChild(el('div', { class: 'stat-card__sub tabular-nums', text: parts.join(' · ') }));
   const acc = el('div', { class: 'due-card__accounts tabular-nums' });
   Object.entries(rem.byAccount).forEach(([a, v]) => {
-    if (v > 0.004) acc.appendChild(el('span', { class: 'chip', text: `${ACCOUNT_LABELS[a].replace(' ანგარიში', '')}: ${formatMoney(v, 'EUR', 0)}` }));
+    if (v > 0.004) acc.appendChild(el('span', { class: 'chip', text: `👤 ${ACCOUNT_LABELS[a]}: ${formatMoney(v, 'EUR', 0)}` }));
   });
   card.appendChild(acc);
   const next = rem.next.slice(0, 2).map(t => `${t.name} ${formatDate(t.dueDate).slice(0, 5)}`).join(' · ');

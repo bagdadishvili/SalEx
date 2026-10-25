@@ -2,7 +2,8 @@
 
 import { el, openModal } from './ui.js';
 import { getSelectedMonth, setSelectedMonth, shiftSelectedMonth, MONTH_NAMES_SHORT } from './monthNav.js';
-import { monthKey } from './state.js';
+import { monthKey, FREE_BUCKET_ID } from './state.js';
+import { resolveTopCategory } from './calc.js';
 
 const YEAR_RANGE_BACK = 3;
 const YEAR_RANGE_FWD = 4;
@@ -99,7 +100,7 @@ export function ownerChip(owner) {
 }
 
 export function georgiaBadge() {
-  return el('span', { class: 'chip chip--georgia-flag', text: '🇬🇪 საქართველო' });
+  return el('span', { class: 'chip chip--georgia-flag', text: '📤 საქართველო' });
 }
 
 export const COLOR_PRESETS = ['#2563eb', '#16a34a', '#d97706', '#dc2626', '#7c3aed', '#db2777', '#0891b2', '#65a30d', '#ea580c', '#4f46e5', '#0d9488', '#be123c'];
@@ -125,3 +126,63 @@ export function freePseudoCategory() {
 }
 
 export { hexToRgb };
+
+// ---------------- shared labels (one place, so every page says the same thing) ----------------
+
+export const PAYER_LABELS = { shared: 'საერთო', giorgi: 'გიორგი', nino: 'ნინო' };
+
+/** "👤 გიორგი" — who pays (from whose bank account). */
+export function payerChip(account) {
+  return el('span', { class: 'chip chip--account', title: 'ვინ იხდის (ვისი ანგარიშიდან)', text: `👤 ${PAYER_LABELS[account] || PAYER_LABELS.shared}` });
+}
+
+export function georgiaChip() {
+  return el('span', { class: 'chip chip--georgia-flag', title: 'საქართველოში გადასარიცხი', text: '📤 საქართველო' });
+}
+
+/**
+ * Category chips without repetition: the main block (e.g. "აუცილებელი") and — only if the
+ * item sits in a sub-category with a different name — that sub-category too.
+ */
+export function categoryChips(categories, categoryId) {
+  const cat = categories.find(c => c.id === categoryId);
+  if (!cat) return [el('span', { class: 'chip', text: '—' })];
+  const top = resolveTopCategory(categories, cat.id);
+  const block = top && top.parentId === FREE_BUCKET_ID ? freePseudoCategory() : top;
+  const chips = [bucketChip(block)];
+  if (block && cat.id !== block.id && cat.name !== block.name) chips.push(el('span', { class: 'chip', text: cat.name }));
+  return chips;
+}
+
+/** Groups used by the templates list and the month preparation screen. */
+export const TEMPLATE_GROUPS = [
+  ['essentials', '🏠 აუცილებელი ხარჯები'],
+  ['georgia', '📤 საქართველოში გადასარიცხი'],
+  ['envelope', '🛒 ყოველდღიური ბიუჯეტები (ნელ-ნელა იხარჯება)'],
+  ['other', '📦 სხვა (დანაზოგი, თავისუფალი…)']
+];
+
+export function groupOfTemplate(categories, tpl) {
+  if (tpl.type === 'envelope') return 'envelope';
+  const cat = categories.find(c => c.id === tpl.categoryId);
+  if (tpl.toGeorgia || (cat && cat.georgiaTransfer)) return 'georgia';
+  const top = cat ? resolveTopCategory(categories, cat.id) : null;
+  if (top && top.parentId !== FREE_BUCKET_ID && top.goalType !== 'min') return 'essentials';
+  return 'other';
+}
+
+/** <select> of categories, sub-categories indented. */
+export function categoryOptions(categories, selectedId) {
+  const select = el('select', {});
+  const tops = categories.filter(c => !c.parentId);
+  const addOpt = (c, prefix) => select.appendChild(el('option', { value: c.id, text: prefix + c.name }));
+  tops.forEach(t => {
+    addOpt(t, '');
+    categories.filter(c => c.parentId === t.id).forEach(ch => addOpt(ch, '   ↳ '));
+  });
+  const free = categories.filter(c => c.parentId === FREE_BUCKET_ID);
+  if (free.length) free.forEach(c => addOpt(c, '🛍 '));
+  categories.forEach(c => { if (![...select.options].some(o => o.value === c.id)) addOpt(c, ''); });
+  if (selectedId) select.value = selectedId;
+  return select;
+}

@@ -27,6 +27,15 @@ function initialMonth() {
   return saved && VALID_MONTH.test(saved) ? saved : monthKey();
 }
 
+/** Small per-device preferences (not synced): e.g. dismissed month-preparation cards. */
+export function getUiPref(key, fallback = null) {
+  const v = readUi()[key];
+  return v === undefined ? fallback : v;
+}
+export function setUiPref(key, value) {
+  writeUi({ [key]: value });
+}
+
 let selected = initialMonth();
 const listeners = new Set();
 

@@ -256,6 +256,9 @@ function init() {
   sync.initAutoSync();
 }
 
+/** Shown in Settings; bump together with CACHE_VERSION in sw.js. */
+export const APP_VERSION = '11';
+
 export { applyAppearance, checkBackupReminder };
 
 init();

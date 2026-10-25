@@ -78,7 +78,6 @@ export function renderCategories(root) {
         el('div', { class: 'row__meta' }, [
           isTop ? el('span', { class: 'chip', text: `${formatPercent(cat.percent, 0)} · ${cat.goalType === 'min' ? 'მინ.' : 'მაქს.'}` }) : null,
           pLabel ? el('span', { class: 'chip', text: pLabel }) : null,
-          cat.georgiaTransfer ? el('span', { class: 'chip chip--georgia', text: '🇬🇪' }) : null,
           el('span', { text: String(count) + ' ჩანაწ.' })
         ])
       ]);
@@ -164,20 +163,13 @@ function openCategoryForm(existing, onSaved) {
     el('div', { style: 'display:flex;align-items:center;gap:8px' }, [colorBtn])
   ]);
 
-  const georgiaCheckbox = el('input', { type: 'checkbox' });
-  georgiaCheckbox.checked = existing?.georgiaTransfer || false;
-  const georgiaField = el('label', { class: 'field', style: 'flex-direction:row;align-items:center;gap:8px' }, [
-    georgiaCheckbox,
-    el('span', { text: 'საქართველოში გადასარიცხია — დეშბორდზე ცალკეც გამოჩნდება (ჯამში ჩათვლის გარდა)' })
-  ]);
-
   form.append(
     el('div', { class: 'field' }, [el('label', { text: 'სახელი' }), nameInput]),
     el('div', { class: 'field' }, [el('label', { text: 'სად ჩაითვალოს' }), parentSelect]),
     percentField,
     goalField,
     colorField,
-    georgiaField
+    el('p', { class: 'card__sub', text: '📤 „საქართველოში გადასარიცხი" ახლა თითო შაბლონზე/ტრანზაქციაზე ინიშნება — ასე შეიძლება იყოს აუცილებელიც და არააუცილებელიც.' })
   );
   syncVisibility();
 
@@ -197,14 +189,14 @@ function openCategoryForm(existing, onSaved) {
     updateState(draft => {
       if (isEdit) {
         const c = draft.categories.find(x => x.id === existing.id);
-        Object.assign(c, { name, parentId, percent, goalType: goalSelect.value, color, georgiaTransfer: georgiaCheckbox.checked });
+        Object.assign(c, { name, parentId, percent, goalType: goalSelect.value, color, georgiaTransfer: false });
         if (parentId) {
           // No longer a top-level block — drop from dashboard order.
           draft.settings.dashboardCardOrder = draft.settings.dashboardCardOrder.filter(k => k !== c.id);
         }
       } else {
         const id = uid('cat');
-        draft.categories.push({ id, name, parentId, percent, goalType: goalSelect.value, color, georgiaTransfer: georgiaCheckbox.checked });
+        draft.categories.push({ id, name, parentId, percent, goalType: goalSelect.value, color, georgiaTransfer: false });
       }
       return draft;
     });

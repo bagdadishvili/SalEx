@@ -5,13 +5,13 @@
 // File format:
 // { "format": "family-budget-templates", "version": 1, "templates": [
 //   { "name": "…", "amount": 100, "currency": "EUR"|"GEL",
-//     "category": "essentials" | "georgia" | <category id>,
-//     "account": "shared"|"giorgi"|"nino", "owner": "shared"|"giorgi"|"nino",
+//     "category": "essentials" | "savings" | "other" | "georgia" (= essentials + 📤) | <category id>,
+//     "toGeorgia": true|false  (📤 money sent to Georgia — works with any category),
+//     "account": "shared"|"giorgi"|"nino"  (who pays / from whose account),
 //     "type": "fixed"|"variable"|"envelope", "cycleMonths": 1, "firstDueDate": "YYYY-MM-DD" } ] }
 
 const DE = 'cat_essentials';
-const GE = 'cat_georgia';
-const CATEGORY_ALIASES = { essentials: DE, georgia: GE };
+const CATEGORY_ALIASES = { essentials: DE, georgia: DE, savings: 'cat_savings', other: 'cat_other' };
 const OK_ACC = ['shared', 'giorgi', 'nino'];
 const OK_TYPE = ['fixed', 'variable', 'envelope'];
 
@@ -29,8 +29,8 @@ export function parseTemplatePack(obj) {
       amount,
       currency: t.currency === 'GEL' ? 'GEL' : 'EUR',
       category: CATEGORY_ALIASES[t.category] || t.category || DE,
+      toGeorgia: !!t.toGeorgia || t.category === 'georgia',
       account: OK_ACC.includes(t.account) ? t.account : 'shared',
-      owner: OK_ACC.includes(t.owner) ? t.owner : 'shared',
       type: OK_TYPE.includes(t.type) ? t.type : 'fixed',
       cycleMonths: [1, 2, 3, 6, 12].includes(Number(t.cycleMonths)) ? Number(t.cycleMonths) : 1,
       firstDueDate: /^\d{4}-\d{2}-\d{2}$/.test(t.firstDueDate || '') ? t.firstDueDate : null
@@ -44,13 +44,10 @@ function uid(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/** Makes sure the two default categories exist (recreates them if they were deleted). */
+/** Makes sure the default "essentials" category exists (recreates it if it was deleted). */
 function ensureCategories(draft) {
   if (!draft.categories.some(c => c.id === DE)) {
     draft.categories.unshift({ id: DE, name: 'აუცილებელი', percent: 65, color: '#2563eb', goalType: 'max', georgiaTransfer: false, parentId: null });
-  }
-  if (!draft.categories.some(c => c.id === GE)) {
-    draft.categories.push({ id: GE, name: 'საქართველოში გადასარიცხი', percent: 0, color: '#d97706', goalType: 'max', georgiaTransfer: true, parentId: DE });
   }
 }
 
@@ -71,8 +68,9 @@ export function addStarterTemplates(draft, startMonthKey, list) {
       currency: t.currency,
       cycleMonths: t.cycleMonths || 1,
       firstDueDate: t.firstDueDate || `${startMonthKey}-01`,
-      owner: t.owner,
+      owner: t.account,
       account: t.account,
+      toGeorgia: t.toGeorgia,
       active: true,
       oneTime: false
     });

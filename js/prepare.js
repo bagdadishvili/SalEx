@@ -5,28 +5,16 @@
 
 import { getState, updateState } from './state.js';
 import { planMonth, applyMonthPreparation, initMonth, txnFromTemplate, monthIsPrepared } from './monthEngine.js';
-import { computeSalarySplit, txnPlannedEur, formatMoney, parseAmountInput, resolveTopCategory, ACCOUNT_LABELS, FREE_BUCKET_ID } from './calc.js';
+import { computeSalarySplit, txnPlannedEur, formatMoney, parseAmountInput, ACCOUNT_LABELS } from './calc.js';
 import { el, openModal, toast } from './ui.js';
 import { monthLabelFull, monthLabel, shiftMonthKey, setSelectedMonth } from './monthNav.js';
 import { fetchEurGelRate } from './rates.js';
+import { TEMPLATE_GROUPS, PAYER_LABELS, groupOfTemplate } from './components.js';
 
 const CYCLE_TXT = { 2: '2 თვეში ერთხელ', 3: '3 თვეში ერთხელ', 6: '6 თვეში ერთხელ', 12: 'წელიწადში ერთხელ' };
-const GROUPS = [
-  ['essentials', '🏠 აუცილებელი ხარჯები (გერმანია)'],
-  ['georgia', '📤 საქართველოში გადასარიცხი'],
-  ['envelope', '🛒 ყოველდღიური ბიუჯეტები (ნელ-ნელა იხარჯება)'],
-  ['other', '📦 სხვა (დანაზოგი, თავისუფალი…)']
-];
-const ACC_SHORT = { shared: 'საერთო', giorgi: 'გიორგის ანგ.', nino: 'ნინოს ანგ.' };
-
-function groupOf(state, tpl) {
-  if (tpl.type === 'envelope') return 'envelope';
-  const cat = state.categories.find(c => c.id === tpl.categoryId);
-  if (cat && cat.georgiaTransfer) return 'georgia';
-  const top = cat ? resolveTopCategory(state.categories, cat.id) : null;
-  if (top && top.parentId !== FREE_BUCKET_ID && top.goalType !== 'min') return 'essentials';
-  return 'other';
-}
+const GROUPS = TEMPLATE_GROUPS;
+const ACC_SHORT = PAYER_LABELS;
+const groupOf = (state, tpl) => groupOfTemplate(state.categories, tpl);
 
 const fmtInput = (v, d = 2) => (Number(v) || 0).toFixed(d).replace('.', ',');
 
@@ -144,7 +132,8 @@ export function openPrepareWizard(initialKey, onDone = () => {}) {
         const eurEl = el('span', { class: 'prep__eur tabular-nums' });
         r.eurEl = eurEl;
         const meta = [
-          el('span', { class: 'chip chip--account', text: `🏦 ${ACC_SHORT[r.tpl.account || 'shared']}` }),
+          el('span', { class: 'chip chip--account', text: `👤 ${ACC_SHORT[r.tpl.account || 'shared']}` }),
+          r.tpl.toGeorgia ? el('span', { class: 'chip chip--georgia-flag', text: '📤' }) : null,
           r.tpl.cycleMonths > 1 && !r.tpl.oneTime ? el('span', { class: 'chip', text: `🔁 ${CYCLE_TXT[r.tpl.cycleMonths] || r.tpl.cycleMonths + ' თვეში ერთხელ'}` }) : null,
           r.tpl.oneTime ? el('span', { class: 'chip', text: 'ერთჯერადი' }) : null,
           r.tpl.type === 'variable' ? el('span', { class: 'chip', text: 'ცვლადი' }) : null,
@@ -220,7 +209,7 @@ export function openPrepareWizard(initialKey, onDone = () => {}) {
       totalsEl.innerHTML = '';
       totalsEl.append(
         el('div', { class: 'prep__total-main' }, [el('span', { text: 'თვის ხარჯი სულ' }), el('strong', { text: formatMoney(total, 'EUR', 0) })]),
-        el('div', { class: 'card__sub', text: `საერთოდან ${formatMoney(byAcc.shared, 'EUR', 0)} · გიორგის ანგ. ${formatMoney(byAcc.giorgi, 'EUR', 0)} · ნინოს ანგ. ${formatMoney(byAcc.nino, 'EUR', 0)}${inc > 0 ? ` · ${Math.round((total / inc) * 100)}% შემოსავლის` : ''}` })
+        el('div', { class: 'card__sub', text: `იხდის: საერთო ${formatMoney(byAcc.shared, 'EUR', 0)} · გიორგი ${formatMoney(byAcc.giorgi, 'EUR', 0)} · ნინო ${formatMoney(byAcc.nino, 'EUR', 0)}${inc > 0 ? ` · ${Math.round((total / inc) * 100)}% შემოსავლის` : ''}` })
       );
       splitEl.innerHTML = '';
       splitDetails.hidden = !(inc > 0);

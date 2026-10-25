@@ -13,6 +13,7 @@ export const SNAPSHOT_REASONS = {
   'before-import': 'იმპორტამდე',
   'before-wipe': 'წაშლამდე',
   'before-restore': 'აღდგენამდე',
+  'before-update': 'აპის განახლებამდე',
   manual: 'ხელით შექმნილი'
 };
 

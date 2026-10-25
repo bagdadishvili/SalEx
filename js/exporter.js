@@ -1,7 +1,7 @@
 // exporter.js — JSON export/import and CSV export (UTF-8 with BOM) per master-prompt §5.5.
 
 import { getState, replaceState, updateState, ensureMonth, snapshotCurrent } from './state.js';
-import { txnAmountEur, resolveTopCategory } from './calc.js';
+import { txnAmountEur, resolveTopCategory, isGeorgia } from './calc.js';
 
 function uid(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -70,7 +70,7 @@ export function exportCsv() {
     return top.parentId === 'free' ? 'თავისუფალი ხარჯვა' : top.name;
   };
   const nameOf = (id) => categories.find(c => c.id === id)?.name || '';
-  const georgiaOf = (id) => (categories.find(c => c.id === id)?.georgiaTransfer ? 'yes' : 'no');
+  const georgiaOf = (t) => (isGeorgia(t, categories) ? 'yes' : 'no');
 
   const headers = ['month', 'name', 'category', 'bucket', 'georgia_transfer', 'owner', 'account', 'currency', 'amount_planned', 'amount_actual', 'amount_eur', 'rate_used', 'paid', 'paid_at', 'due_date', 'note'];
   const rows = [headers.join(',')];
@@ -85,7 +85,7 @@ export function exportCsv() {
         t.name,
         nameOf(t.categoryId),
         bucketNameOf(t.categoryId),
-        georgiaOf(t.categoryId),
+        georgiaOf(t),
         t.owner,
         t.account || 'shared',
         t.currency,
@@ -181,7 +181,7 @@ export function importCsv(file) {
             const catName = get(r, iCat);
             let cat = draft.categories.find(c => c.name === catName);
             if (!cat && catName) {
-              cat = { id: uid('cat'), name: catName, percent: 0, color: '#94a3b8', goalType: 'max', georgiaTransfer: get(r, iGeo) === 'yes', parentId: 'free' };
+              cat = { id: uid('cat'), name: catName, percent: 0, color: '#94a3b8', goalType: 'max', georgiaTransfer: false, parentId: 'free' };
               draft.categories.push(cat);
             }
 
@@ -194,7 +194,8 @@ export function importCsv(file) {
               id: uid('txn'), templateId: null, name,
               categoryId: cat ? cat.id : (draft.categories[0]?.id || null),
               owner: ['giorgi', 'nino', 'shared'].includes(get(r, iOwner)) ? get(r, iOwner) : 'shared',
-              account: ['giorgi', 'nino', 'shared'].includes(get(r, iAccount)) ? get(r, iAccount) : 'shared',
+              account: ['giorgi', 'nino', 'shared'].includes(get(r, iAccount)) ? get(r, iAccount) : (['giorgi', 'nino', 'shared'].includes(get(r, iOwner)) ? get(r, iOwner) : 'shared'),
+              toGeorgia: get(r, iGeo) === 'yes',
               currency, amountPlanned,
               amountActual: actualRaw !== '' ? Number(actualRaw) : (paid ? amountPlanned : null),
               paid,

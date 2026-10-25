@@ -1,17 +1,36 @@
 // ui.js — shared small UI helpers: toast, confirm dialog, generic modal.
 
-export function toast(message, variant = 'ok') {
+export function toast(message, variant = 'ok', { actionLabel = null, onAction = null, duration = 2200 } = {}) {
   const root = document.getElementById('toast-root');
   if (!root) return;
   const div = document.createElement('div');
   div.className = `toast toast--${variant}`;
-  div.textContent = message;
-  root.appendChild(div);
-  requestAnimationFrame(() => div.classList.add('toast--visible'));
-  setTimeout(() => {
+  const text = document.createElement('span');
+  text.textContent = message;
+  div.appendChild(text);
+  let timer = null;
+  const hide = () => {
+    clearTimeout(timer);
     div.classList.remove('toast--visible');
     setTimeout(() => div.remove(), 250);
-  }, 2200);
+  };
+  if (actionLabel && onAction) {
+    div.classList.add('toast--action');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'toast__action';
+    btn.textContent = actionLabel;
+    btn.addEventListener('click', () => { hide(); onAction(); });
+    div.appendChild(btn);
+  }
+  root.appendChild(div);
+  requestAnimationFrame(() => div.classList.add('toast--visible'));
+  timer = setTimeout(hide, actionLabel ? Math.max(duration, 6000) : duration);
+}
+
+/** "Deleted — ↩ undo" toast. */
+export function undoToast(message, onUndo) {
+  toast(message, 'ok', { actionLabel: '↩ დაბრუნება', onAction: onUndo, duration: 7000 });
 }
 
 export function savedToast() {

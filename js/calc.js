@@ -123,10 +123,19 @@ export function effectiveCardOrder(settings, categories) {
   return order;
 }
 
-/** Sum of transactions flagged as Georgia-transfer categories (independent of where they're counted). */
+/**
+ * "📤 to Georgia" is a flag on each template/transaction (v5) — independent of whether the
+ * expense is essential or not. (Old category-level flags are still honoured, just in case.)
+ */
+export function isGeorgia(txn, categories) {
+  if (txn.toGeorgia) return true;
+  const c = categories && categories.find(x => x.id === txn.categoryId);
+  return !!(c && c.georgiaTransfer);
+}
+
+/** Sum of Georgia transfers (shown separately; they are ALSO counted in their own category). */
 function sumGeorgiaTransfer(month, categories) {
-  const geoIds = new Set(categories.filter(c => c.georgiaTransfer).map(c => c.id));
-  const txns = month.transactions.filter(t => geoIds.has(t.categoryId));
+  const txns = month.transactions.filter(t => isGeorgia(t, categories));
   const plannedGel = txns.filter(t => t.currency === 'GEL').reduce((s, t) => s + t.amountPlanned, 0);
   const plannedEur = txns.reduce((s, t) => s + txnPlannedEur(t, month.exchangeRate), 0);
   const actualEur = txns.reduce((s, t) => s + txnPaidEur(t, month.exchangeRate), 0);
@@ -191,7 +200,8 @@ export function computeMonthTotals(month) {
 }
 
 export const ACCOUNTS = ['shared', 'giorgi', 'nino'];
-export const ACCOUNT_LABELS = { shared: 'საერთო ანგარიში', giorgi: 'გიორგის ანგარიში', nino: 'ნინოს ანგარიში' };
+// Who pays = from whose bank account the money leaves (also whose free money it reduces).
+export const ACCOUNT_LABELS = { shared: 'საერთო', giorgi: 'გიორგი', nino: 'ნინო' };
 
 /**
  * What still has to go out this month, total and per paying account.
@@ -286,7 +296,6 @@ export function computeSalarySplit(month, categories, settings) {
  */
 export function computeYearOverview(months, categories, year) {
   const minTops = new Set(categories.filter(c => !c.parentId && c.goalType === 'min').map(c => c.id));
-  const geoIds = new Set(categories.filter(c => c.georgiaTransfer).map(c => c.id));
   const rows = [];
   for (let m = 1; m <= 12; m++) {
     const key = `${year}-${String(m).padStart(2, '0')}`;
@@ -297,7 +306,7 @@ export function computeYearOverview(months, categories, year) {
       const eur = txnPaidEur(t, month.exchangeRate);
       if (eur === 0) return;
       if (minTops.has(topIdOf(categories, t.categoryId))) saved += eur; else spent += eur;
-      if (geoIds.has(t.categoryId)) georgia += eur;
+      if (isGeorgia(t, categories)) georgia += eur;
     });
     const income = totalIncome(month);
     if (income === 0 && month.transactions.length === 0) continue;
@@ -409,7 +418,7 @@ export function runSelfChecks() {
     exchangeRate: 3, income: { giorgi: 1000, nino: 0 }, plannedSavings: null,
     transactions: [
       { id: 't1', categoryId: 'cat_essentials', owner: 'shared', currency: 'EUR', amountPlanned: 650, amountActual: 650, paid: true },
-      { id: 't2', categoryId: 'cat_georgia', owner: 'giorgi', currency: 'GEL', amountPlanned: 300, amountActual: null, paid: false }
+      { id: 't2', categoryId: 'cat_essentials', toGeorgia: true, owner: 'giorgi', currency: 'GEL', amountPlanned: 300, amountActual: null, paid: false }
     ]
   };
   assertEq('sumAllPercents == 100', sumAllPercents(settings, categories), 100);

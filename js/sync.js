@@ -14,7 +14,7 @@
 //     new Gist revision, and once a day a monthly backup file (backup-YYYY-MM.json) is
 //     written next to the main file — so older cloud versions can always be restored.
 
-import { getState, replaceState, onStateChange, isPristine, dataWeight } from './state.js';
+import { getState, replaceState, onStateChange, isPristine, dataWeight, upgradeState } from './state.js';
 import { summarizeState } from './backup.js';
 import { mergeStates, canonical } from './records.js';
 
@@ -117,7 +117,9 @@ function parseRemote(text) {
   if (!text) return null;
   try {
     const obj = JSON.parse(text);
-    return obj && typeof obj === 'object' && obj.months && typeof obj.months === 'object' ? obj : null;
+    if (!(obj && typeof obj === 'object' && obj.months && typeof obj.months === 'object')) return null;
+    // A copy written by an older app version is converted to the current format first.
+    return upgradeState(obj);
   } catch {
     return null;
   }
