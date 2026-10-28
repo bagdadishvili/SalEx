@@ -232,10 +232,14 @@ export function computeRemaining(month) {
  * Bills debited directly from a person's own account stay there — so that person only
  * transfers the rest to the shared account (no money back-and-forth).
  */
-export function computeSalarySplit(month, categories, settings) {
+export function computeSalarySplit(month, categories, settings, overrides = {}) {
   const income = { giorgi: month.income?.giorgi || 0, nino: month.income?.nino || 0 };
   const T = income.giorgi + income.nino;
-  const mode = settings.contributionSplit === 'equal' ? 'equal' : 'proportional';
+  // The family splits shared costs 50/50 (v13). 'proportional' remains available to callers only.
+  const mode = (overrides.mode || 'equal') === 'proportional' ? 'proportional' : 'equal';
+  // keepDebits=false: EVERYTHING goes to the shared account (classic 50/50); bills that are
+  // debited from a personal account then have to be sent back from the shared account.
+  const keepDebits = overrides.keepDebits !== false;
   const basis = settings.contributionBasis === 'plan' ? 'plan' : 'actual';
   const share = mode === 'equal' || T <= 0
     ? { giorgi: 0.5, nino: 0.5 }
@@ -276,14 +280,17 @@ export function computeSalarySplit(month, categories, settings) {
     const freeTarget = T * (Number(settings.planFree?.[p]?.percent) || 0) / 100;
     persons[p] = {
       income: income[p], share: share[p], essentials, savings: save,
-      keepForDebits: debits[p], toShared: essentials - debits[p], free, freeTarget
+      keepForDebits: keepDebits ? debits[p] : 0,
+      toShared: keepDebits ? essentials - debits[p] : essentials,
+      backFromShared: keepDebits ? 0 : debits[p],
+      free, freeTarget
     };
   });
   return {
-    totalIncome: T, mode, basis, share,
+    totalIncome: T, mode, basis, share, keepDebits,
     spend, spendPlannedTotal, spendBudget, savings, debits,
     spendPct: T > 0 ? (spendPlannedTotal / T) * 100 : 0,
-    sharedNeeds: debits.shared + (basis === 'plan' ? Math.max(0, spend - spendPlannedTotal) : 0),
+    sharedNeeds: (keepDebits ? debits.shared : spendPlannedTotal) + (basis === 'plan' ? Math.max(0, spend - spendPlannedTotal) : 0),
     persons
   };
 }
@@ -464,13 +471,24 @@ export function runSelfChecks() {
     { id: 'r', categoryId: 'cat_essentials', currency: 'EUR', amountPlanned: 1200, paid: false, account: 'shared' },
     { id: 'l', categoryId: 'cat_essentials', currency: 'EUR', amountPlanned: 400, paid: false, account: 'giorgi' }
   ] };
-  const split = computeSalarySplit(sm, categories, { ...settings, contributionSplit: 'proportional', contributionBasis: 'actual' });
+  const split = computeSalarySplit(sm, categories, { ...settings, contributionBasis: 'actual' }, { mode: 'proportional' });
   assertClose('split giorgi essentials 1200 (75% of 1600)', split.persons.giorgi.essentials, 1200);
   assertClose('split giorgi keeps 400 for own debits', split.persons.giorgi.keepForDebits, 400);
   assertClose('split giorgi to shared 800', split.persons.giorgi.toShared, 800);
   assertClose('split nino to shared 400', split.persons.nino.toShared, 400);
   assertClose('split savings giorgi 750 (25% of 4000 * 75%)', split.persons.giorgi.savings, 750);
   assertClose('shared account needs 1200', split.sharedNeeds, 1200);
+  // Classic 50/50, everything to the shared account: 1600/2 = 800 each; 400 goes back to Giorgi.
+  const half = computeSalarySplit(sm, categories, { ...settings, contributionBasis: 'actual' }, { keepDebits: false });
+  // 50/50 keeping own-account debits: 800 each; Giorgi keeps 400 for his loan -> 400 to shared, Nino 800.
+  const keep = computeSalarySplit(sm, categories, { ...settings, contributionBasis: 'actual' });
+  assertClose('50/50 keep: giorgi to shared 400', keep.persons.giorgi.toShared, 400);
+  assertClose('50/50 keep: nino to shared 800', keep.persons.nino.toShared, 800);
+  assertClose('50/50 keep: giorgi keeps 400', keep.persons.giorgi.keepForDebits, 400);
+  assertClose('50/50 full: giorgi to shared 800', half.persons.giorgi.toShared, 800);
+  assertClose('50/50 full: nino to shared 800', half.persons.nino.toShared, 800);
+  assertClose('50/50 full: 400 back to giorgi', half.persons.giorgi.backFromShared, 400);
+  assertClose('50/50 full: savings 500 each', half.persons.nino.savings, 500);
   const rem = computeRemaining({ ...sm, transactions: [...sm.transactions, env] });
   assertClose('remaining total 1600 + 660', rem.total, 2260);
   assertClose('remaining giorgi account 400', rem.byAccount.giorgi, 400);

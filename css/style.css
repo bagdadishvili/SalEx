@@ -289,13 +289,7 @@ h1, h2, h3, h4 { margin: 0 0 var(--space-3); font-weight: 700; }
   align-items: stretch; /* cards in the same row always share the same height */
 }
 
-@media (min-width: 640px) {
-  .card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-
-@media (min-width: 960px) {
-  .card-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-}
+/* v13: one card per row on every screen size (no side-by-side cards). */
 
 /* ---------- Compact stat cards (dashboard) ---------- */
 
@@ -308,11 +302,7 @@ h1, h2, h3, h4 { margin: 0 0 var(--space-3); font-weight: 700; }
   margin-bottom: 0;
 }
 
-/* Tall / two-column-content cards get the full row on phones, half the row on desktop. */
 .stat-card--wide { grid-column: 1 / -1; }
-@media (min-width: 640px) {
-  .stat-card--wide { grid-column: span 2; }
-}
 
 .stat-card__label {
   font-size: 0.7rem;
@@ -956,3 +946,66 @@ h1, h2, h3, h4 { margin: 0 0 var(--space-3); font-weight: 700; }
 [data-theme="dark"] .chip--georgia-flag { background: #4a3a0f; color: #fcd34d; }
 .dash-customize { text-align: center; margin: var(--space-3) 0; }
 .version-note { font-size: 0.75rem; color: var(--text-faint); text-align: center; margin-top: var(--space-4); }
+
+/* ---------- v12: salary split as a clear 3-column table ---------- */
+.split-tabs { margin: var(--space-2) 0; }
+.split-tabs .segmented__btn { font-size: 0.78rem; padding: 4px 6px; line-height: 1.2; }
+.split-table { width: 100%; border-collapse: collapse; margin: var(--space-1) 0; }
+.split-table th, .split-table td { padding: 7px 4px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.split-table thead th { font-size: 0.85rem; text-align: right; font-weight: 700; }
+.split-table thead th small { display: block; font-weight: 400; color: var(--text-muted); font-size: 0.7rem; }
+.split-table tbody th { text-align: left; font-weight: 500; font-size: 0.8rem; color: var(--text-muted); width: 46%; }
+.split-table td { text-align: right; white-space: nowrap; font-size: 0.95rem; width: 27%; }
+.split-table__income td { color: var(--text-muted); font-size: 0.85rem; }
+.split-table__strong { font-weight: 800; }
+.split-table__main th { color: var(--text); font-weight: 700; }
+.split-table__main td { font-size: 1.1rem; color: var(--accent); }
+.split-table tbody tr:last-child th, .split-table tbody tr:last-child td { border-bottom: none; }
+.split-notes { line-height: 1.45; }
+.add-now .inline-month { min-height: 32px; padding: 2px 6px; margin: 0 4px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); font: inherit; }
+.add-now { background: rgba(var(--accent-rgb), 0.06); border-radius: var(--radius-sm); padding: var(--space-2); }
+.envelope-row__top { flex-wrap: wrap; }
+
+
+/* ---------- v13: full-width cards — title and main number on ONE line ---------- */
+.dashboard-view { max-width: 760px; margin: 0 auto; }
+.stat-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: var(--space-3);
+  row-gap: 4px;
+  align-items: center;
+  min-height: 0;
+}
+.stat-card > * { grid-column: 1 / -1; }
+.stat-card > .stat-card__label { grid-column: 1; white-space: normal; overflow: visible; line-height: 1.3; }
+.stat-card > .stat-card__value { grid-column: 2; text-align: right; white-space: nowrap; font-size: 1.2rem; }
+.stat-card > .stat-card__label:last-child { grid-column: 1 / -1; }
+.stat-card__sub { line-height: 1.4; }
+.stat-card .progress--compact { margin-top: 2px; }
+
+/* free money: one row per person instead of two cramped columns */
+.free-split { display: flex; flex-direction: column; gap: var(--space-2); }
+.free-split__person { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--space-2); row-gap: 2px; padding-left: var(--space-2); }
+.free-split__person > * { grid-column: 1 / -1; }
+.free-split__person > .stat-card__sub:first-child { grid-column: 1; }
+.free-split__person > .free-split__share { grid-column: 2; grid-row: 1; text-align: right; white-space: nowrap; }
+
+/* summary: 4 numbers in one row when there is room, 2×2 on small phones */
+.summary-grid__value { white-space: nowrap; }
+
+/* rate card: compact input */
+.rate-row .inline-edit { max-width: 160px; }
+.rate-row { justify-content: flex-start; }
+
+/* income card: two inputs side by side are fine; keep them compact */
+.stat-card .field-row .field { min-width: 120px; }
+
+.split-tabs .segmented__btn { white-space: normal; }
+.stat-card.prepare-card { display: flex; flex-wrap: wrap; align-items: center; }
+/* summary adapts to the card width (2×2 on phones, 4 in a row when there is room) */
+.summary-grid { grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)) !important; }
+.pva-row__label { gap: var(--space-2); }
+.pva-row__label > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pva-row__delta { white-space: nowrap; flex: none; }
+.split-table tbody th { white-space: nowrap; }

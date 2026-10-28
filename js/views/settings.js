@@ -1,6 +1,6 @@
 // views/settings.js — Bucket CRUD, free-money split, appearance, data, sync, danger zone §5.5.
 
-import { getState, updateState, wipeState, replaceState, snapshotCurrent } from '../state.js';
+import { getState, updateState, wipeState, replaceState, snapshotCurrent, deviceName, setDeviceName } from '../state.js';
 import { sumAllPercents, effectiveCardOrder } from '../calc.js';
 import { el, confirmDialog, toast, openModal } from '../ui.js';
 import { listSnapshots, getSnapshotData, saveSnapshot, summarizeState, SNAPSHOT_REASONS } from '../backup.js';
@@ -22,7 +22,7 @@ function summaryText(sum) {
 
 function fmtDateTime(iso) {
   if (!iso || iso.startsWith('1970')) return '—';
-  return new Date(iso).toLocaleString('ka-GE', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return new Date(iso).toLocaleString('ka-GE', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
 function cardLabel(state, key) {
@@ -124,16 +124,7 @@ function renderSplitSettings() {
   const card = el('div', { class: 'card' });
   card.appendChild(el('div', { class: 'card__title', text: 'ახალი თვე, ხელფასის განაწილება და კურსი' }));
 
-  const modeSelect = el('select', {}, [
-    el('option', { value: 'proportional', text: 'ხელფასის პროპორციით (ორივე ერთნაირ % იხდის)' }),
-    el('option', { value: 'equal', text: 'თანაბრად (50/50)' })
-  ]);
-  modeSelect.value = state.settings.contributionSplit || 'proportional';
-  modeSelect.addEventListener('change', () => {
-    updateState(d => { d.settings.contributionSplit = modeSelect.value; return d; });
-    toast('შენახულია ✓');
-  });
-  card.appendChild(el('div', { class: 'field' }, [el('label', { text: 'ვინ რა წილს იხდის საერთო ხარჯებიდან' }), modeSelect]));
+  card.appendChild(el('p', { class: 'card__sub', text: 'საერთო ხარჯი იყოფა 50/50. დეშბორდის ბარათი „ვინ რამდენი გადარიცხოს" ორ ვარიანტს აჩვენებს: ა) ჩამოსაჭრელს ანგარიშზე ვიტოვებთ, ბ) სრულად საერთოზე და მერე უკან.' }));
 
   const basisSelect = el('select', {}, [
     el('option', { value: 'actual', text: 'ზუსტად რეალური გადასახადები (შაბლონებიდან)' }),
@@ -145,7 +136,6 @@ function renderSplitSettings() {
     toast('შენახულია ✓');
   });
   card.appendChild(el('div', { class: 'field' }, [el('label', { text: 'რამდენი გადაირიცხოს აუცილებელ ხარჯზე' }), basisSelect]));
-  card.appendChild(el('p', { class: 'card__sub', text: 'დეშბორდის „ხელფასის განაწილება" თითოეულს აჩვენებს: რამდენი გადარიცხოს საერთო ანგარიშზე, რამდენი დატოვოს საკუთარზე (თავისი ანგარიშიდან ჩამოჭრილი გადასახადებისთვის — წინ და უკან გადარიცხვა აღარ სჭირდება), რამდენი დანაზოგზე და რა რჩება თავისუფალი. ანგარიში თითო შაბლონში ირჩევა („საიდან იჭრება").' }));
 
   const modeNew = el('select', {}, [
     el('option', { value: 'wizard', text: '📅 მომზადების ფანჯრით — ჯერ ვნახავ სიას (რეკომენდებული)' }),
@@ -366,6 +356,12 @@ function renderSync() {
     toast('სინქრონიზაცია გათიშულია');
   });
 
+  const nameInput = el('input', { type: 'text', placeholder: 'მაგ. გიორგი ან ნინო', value: deviceName(), maxlength: '30' });
+  nameInput.addEventListener('change', () => { setDeviceName(nameInput.value); toast('შენახულია ✓'); });
+  card.appendChild(el('div', { class: 'field' }, [
+    el('label', { text: 'ვინ იყენებს ამ მოწყობილობას (ჩანს მეორე ტელეფონზე: „ნინო: ცვლილება მოვიდა")' }),
+    nameInput
+  ]));
   card.appendChild(el('div', { class: 'field' }, [el('label', { text: 'GitHub Personal Access Token (gist უფლებით)' }), tokenInput]));
   card.appendChild(el('details', { class: 'help-details' }, [
     el('summary', { text: 'Gist ID (მოწინავე)' }),
@@ -373,7 +369,7 @@ function renderSync() {
   ]));
   card.appendChild(statusEl);
   card.appendChild(el('div', { class: 'btn-row', style: 'align-items:center' }, [connectBtn, syncBtn, backupBtn, disconnectBtn]));
-  card.appendChild(el('p', { class: 'card__sub', text: 'ავტომატურად: ყოველი ცვლილება რამდენიმე წამში იტვირთება, აპის გახსნისას და ყოველ წუთს მოდის მეორე მოწყობილობის ცვლილებები. ორივე მოწყობილობის ცვლილებები ერთიანდება ჩანაწერ-ჩანაწერ — ერთმანეთს არ გადაეწერება. დღეში ერთხელ ღრუბელში ცალკე სარეზერვო ფაილიც იქმნება (backup-წელი-თვე.json).' }));
+  card.appendChild(el('p', { class: 'card__sub', text: '⚡ ცოცხალი რეჟიმი: შენი ცვლილება ~1 წამში იტვირთება, ხოლო სანამ აპი ეკრანზეა გახსნილი, მეორე ტელეფონის ცვლილებები ყოველ ~5 წამში მოდის (აპის დახურვისას ჩერდება და გახსნისთანავე ახლდება). ორივე მოწყობილობის ცვლილებები ერთიანდება ჩანაწერ-ჩანაწერ — ერთმანეთს არ გადაეწერება. დღეში ერთხელ ღრუბელში ცალკე სარეზერვო ფაილიც იქმნება (backup-წელი-თვე.json).' }));
 
   card.appendChild(el('details', { class: 'help-details' }, [
     el('summary', { text: '📲 ნინოს (ან სხვა მოწყობილობის) დაკავშირება' }),
@@ -523,7 +519,7 @@ function renderDataSection() {
   card.appendChild(el('div', { class: 'card__title', text: 'მონაცემები' }));
 
   const lastBackupText = state.settings.lastBackupAt
-    ? `ბოლო ბექაფი: ${new Date(state.settings.lastBackupAt).toLocaleString('ka-GE')}`
+    ? `ბოლო ბექაფი: ${new Date(state.settings.lastBackupAt).toLocaleString('ka-GE', { hour12: false })}`
     : 'ბოლო ბექაფი: არასდროს';
   const backupInfo = el('div', { class: 'card__sub', text: lastBackupText });
   card.appendChild(backupInfo);
@@ -535,7 +531,7 @@ function renderDataSection() {
     exportJson();
     toast('ბექაფი ჩამოტვირთულია ✓');
     checkBackupReminder();
-    backupInfo.textContent = `ბოლო ბექაფი: ${new Date().toLocaleString('ka-GE')}`;
+    backupInfo.textContent = `ბოლო ბექაფი: ${new Date().toLocaleString('ka-GE', { hour12: false })}`;
   });
 
   const importInput = el('input', { type: 'file', accept: '.json', style: 'display:none' });

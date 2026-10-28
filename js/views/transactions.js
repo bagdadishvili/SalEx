@@ -1,7 +1,7 @@
 // views/transactions.js — Transactions list, filters, paid-flow §5.2.
 
 import { getState, updateState, ensureMonth, todayISO, FREE_BUCKET_ID } from '../state.js';
-import { generateMonthTransactions, monthNeedsGeneration, monthIsPrepared, initMonth } from '../monthEngine.js';
+import { generateMonthTransactions, monthNeedsGeneration, monthIsPrepared, initMonth, addTemplateToMonth } from '../monthEngine.js';
 import { openPrepareWizard, preparationPreview } from '../prepare.js';
 import { monthLabelFull } from '../monthNav.js';
 import { txnAmountEur, txnPlannedEur, txnPaidEur, topIdOf, resolveTopCategory, formatMoney, parseAmountInput, isEnvelope, envelopeSpent, ACCOUNT_LABELS } from '../calc.js';
@@ -36,7 +36,7 @@ export function renderTransactions(root) {
   container.appendChild(monthNav);
 
   const toolbar = el('div', { class: 'btn-row' });
-  const addBtn = el('button', { class: 'btn btn--primary', text: '+ ერთჯერადი ტრანზაქცია' });
+  const addBtn = el('button', { class: 'btn btn--primary', text: '+ ახალი ხარჯი' });
   const regenBtn = el('button', { class: 'btn btn--secondary', text: '📅 თვის მომზადება' });
   toolbar.append(addBtn, regenBtn);
   container.appendChild(toolbar);
@@ -394,6 +394,30 @@ function openTransactionForm(existing, monthKeyStr, onSaved) {
 
   const noteInput = el('input', { type: 'text', value: existing?.note || '' });
 
+  // New expense that will repeat: save it as a template too (and keep it in this month).
+  const asTemplateBox = el('input', { type: 'checkbox' });
+  const cycleSelect = el('select', {}, [
+    el('option', { value: '1', text: 'ყოველ თვე' }),
+    el('option', { value: '2', text: '2 თვეში ერთხელ' }),
+    el('option', { value: '3', text: '3 თვეში ერთხელ' }),
+    el('option', { value: '6', text: '6 თვეში ერთხელ' }),
+    el('option', { value: '12', text: 'წელიწადში ერთხელ' })
+  ]);
+  const typeSelect = el('select', {}, [
+    el('option', { value: 'fixed', text: 'ფიქსირებული' }),
+    el('option', { value: 'variable', text: 'ცვლადი' }),
+    el('option', { value: 'envelope', text: '🛒 ბიუჯეტი (ნელ-ნელა იხარჯება)' })
+  ]);
+  const tplExtra = el('div', { class: 'field-row', hidden: 'true' }, [
+    el('div', { class: 'field' }, [el('label', { text: 'რამდენად ხშირად' }), cycleSelect]),
+    el('div', { class: 'field' }, [el('label', { text: 'ტიპი' }), typeSelect])
+  ]);
+  asTemplateBox.addEventListener('change', () => { tplExtra.hidden = !asTemplateBox.checked; });
+  const asTemplateField = isEdit && existing.templateId ? null : el('div', {}, [
+    el('label', { class: 'field checkbox-field' }, [asTemplateBox, el('span', { text: '🔁 შაბლონადაც შევინახო — მომავალ თვეებშიც ავტომატურად მოვა' })]),
+    tplExtra
+  ]);
+
   form.append(
     el('div', { class: 'field' }, [el('label', { text: 'სახელი' }), nameInput]),
     el('div', { class: 'field' }, [el('label', { text: 'კატეგორია' }), categorySelect]),
@@ -404,14 +428,15 @@ function openTransactionForm(existing, monthKeyStr, onSaved) {
     el('div', { class: 'field' }, [el('label', { text: 'ვადა' }), dueDateInput]),
     el('label', { class: 'field checkbox-field' }, [georgiaBox, el('span', { text: '📤 საქართველოში გადასარიცხი' })]),
     el('div', { class: 'field' }, [el('label', { text: 'ვინ იხდის (ვისი ანგარიშიდან)' }), accountSelect]),
-    el('div', { class: 'field' }, [el('label', { text: 'შენიშვნა' }), noteInput])
+    el('div', { class: 'field' }, [el('label', { text: 'შენიშვნა' }), noteInput]),
+    asTemplateField
   );
 
   const actions = el('div', { class: 'btn-row' });
   actions.appendChild(el('button', { class: 'btn btn--primary', type: 'submit', text: isEdit ? 'შენახვა' : 'დამატება' }));
   form.appendChild(actions);
 
-  const { close } = openModal(form, { title: isEdit ? 'ტრანზაქციის რედაქტირება' : 'ერთჯერადი ტრანზაქცია' });
+  const { close } = openModal(form, { title: isEdit ? 'ტრანზაქციის რედაქტირება' : 'ახალი ხარჯი ამ თვეში' });
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -420,7 +445,30 @@ function openTransactionForm(existing, monthKeyStr, onSaved) {
     const amount = parseAmountInput(amountInput.value);
     if (amount <= 0) { toast('შეიყვანეთ სწორი თანხა', 'error'); return; }
 
+    let madeTemplate = false;
     updateState(draft => {
+      if (asTemplateBox.checked) {
+        // Template first; the month's transaction is then created FROM it (linked, no duplicates).
+        const tplId = uid('tpl');
+        draft.templates.push({
+          id: tplId, name, categoryId: categorySelect.value, type: typeSelect.value,
+          amount, currency: currencySelect.value, cycleMonths: Number(cycleSelect.value) || 1,
+          firstDueDate: dueDateInput.value || `${monthKeyStr}-01`, owner: accountSelect.value, account: accountSelect.value,
+          toGeorgia: georgiaBox.checked, active: true, oneTime: false
+        });
+        madeTemplate = true;
+        if (isEdit) {
+          const m = findMonthByTxnId(draft, existing.id);
+          const t = findTxn(draft, existing.id);
+          Object.assign(t, { templateId: tplId, name, categoryId: categorySelect.value, currency: currencySelect.value, amountPlanned: amount, dueDate: dueDateInput.value, owner: accountSelect.value, account: accountSelect.value, toGeorgia: georgiaBox.checked, note: noteInput.value });
+          if (m && !m.preparedAt) m.addedSingly = true;
+        } else {
+          addTemplateToMonth(draft, tplId, monthKeyStr);
+          const t = draft.months[monthKeyStr].transactions.find(x => x.templateId === tplId);
+          if (t) { t.note = noteInput.value; t.dueDate = dueDateInput.value || t.dueDate; }
+        }
+        return draft;
+      }
       if (isEdit) {
         const t = findTxn(draft, existing.id);
         Object.assign(t, {
@@ -438,7 +486,7 @@ function openTransactionForm(existing, monthKeyStr, onSaved) {
       }
       return draft;
     });
-    toast('შენახულია ✓');
+    toast(madeTemplate ? 'შენახულია ✓ — შაბლონიც შეიქმნა, მომავალ თვეებშიც მოვა' : 'შენახულია ✓');
     close();
     onSaved();
   });

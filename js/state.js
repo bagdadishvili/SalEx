@@ -375,10 +375,22 @@ export function updateState(mutator) {
   const now = new Date().toISOString();
   stampChanges(state, result, now);
   result.updatedAt = now;
+  const me = deviceName();
+  if (me) result.lastEditor = me; // shown on the other phone as "who changed it"
   state = result;
   saveState();
   notify();
   return state;
+}
+
+const DEVICE_KEY = 'familyBudget.device';
+
+/** This device's display name (e.g. "ნინო"), stored only on this device. */
+export function deviceName() {
+  try { return (localStorage.getItem(DEVICE_KEY) || '').trim(); } catch { return ''; }
+}
+export function setDeviceName(name) {
+  try { localStorage.setItem(DEVICE_KEY, String(name || '').trim().slice(0, 30)); } catch { /* ignore */ }
 }
 
 /** True if this state was never edited on this device (fresh seed / empty). */

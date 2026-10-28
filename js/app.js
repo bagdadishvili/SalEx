@@ -1,6 +1,6 @@
 // app.js — entry point + router.
 
-import { loadState, getState, updateState, onStateReplaced, isPristine } from './state.js';
+import { loadState, getState, updateState, onStateReplaced, isPristine, deviceName } from './state.js';
 import { runSelfChecks } from './calc.js';
 import { saveSnapshotIfDue } from './backup.js';
 import * as sync from './sync.js';
@@ -108,7 +108,7 @@ function checkBackupReminder() {
 
 function describeSummary(s) {
   if (!s) return '—';
-  const when = s.updatedAt && !s.updatedAt.startsWith('1970') ? ` · ბოლო ცვლილება ${new Date(s.updatedAt).toLocaleString('ka-GE')}` : '';
+  const when = s.updatedAt && !s.updatedAt.startsWith('1970') ? ` · ბოლო ცვლილება ${new Date(s.updatedAt).toLocaleString('ka-GE', { hour12: false })}` : '';
   return `${s.templates} შაბლონი, ${s.transactions} ტრანზაქცია, ${s.months} თვე${when}`;
 }
 
@@ -235,7 +235,10 @@ function init() {
   let pendingRerender = false;
   onStateReplaced((source) => {
     applyAppearance();
-    if (source === 'sync') toast('მონაცემები განახლდა მეორე მოწყობილობიდან ✓');
+    if (source === 'sync') {
+      const who = getState().lastEditor;
+      toast(who && who !== deviceName() ? `🔄 ${who}: ცვლილება მოვიდა ✓` : '🔄 მონაცემები განახლდა მეორე მოწყობილობიდან ✓');
+    }
     if (source === 'other-tab') toast('მონაცემები განახლდა სხვა ფანჯრიდან');
     // Don't yank an input away while someone is typing — redraw when they leave the field.
     const active = document.activeElement;
@@ -257,7 +260,7 @@ function init() {
 }
 
 /** Shown in Settings; bump together with CACHE_VERSION in sw.js. */
-export const APP_VERSION = '11';
+export const APP_VERSION = '13';
 
 export { applyAppearance, checkBackupReminder };
 

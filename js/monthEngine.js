@@ -134,7 +134,28 @@ export function nextDueFrom(tpl, fromKey) {
  */
 export function monthIsPrepared(state, key) {
   const m = state.months[key];
-  return !!(m && (m.preparedAt || m.transactions.some(t => t.templateId)));
+  if (!m) return false;
+  if (m.preparedAt) return true;
+  // Older data: a month that already holds template transactions counts as prepared —
+  // unless they were added one by one ("also add to this month"), which must not
+  // switch on the automatic top-up of all other templates.
+  return !m.addedSingly && m.transactions.some(t => t.templateId);
+}
+
+/**
+ * Adds ONE template's transaction to a month right now (even if the template is not
+ * due there, e.g. a new expense that starts today). Returns false if it is already there.
+ */
+export function addTemplateToMonth(draft, tplId, key) {
+  const tpl = draft.templates.find(t => t.id === tplId);
+  if (!tpl) return false;
+  const month = initMonth(draft, key);
+  if (month.transactions.some(t => t.templateId === tplId)) return false;
+  if (!month.preparedAt) month.addedSingly = true;
+  month.skipTemplates = (month.skipTemplates || []).filter(id => id !== tplId);
+  if (draft.deleted) delete draft.deleted[generatedTxnId(tplId, key)];
+  month.transactions.push(txnFromTemplate(tpl, key, { fresh: true }));
+  return true;
 }
 
 /**

@@ -7,7 +7,7 @@ import { el, openModal, confirmDialog, toast, undoToast, formatDate } from '../u
 import { monthKey } from '../state.js';
 import { getSelectedMonth, setSelectedMonth, monthLabel, shiftMonthKey } from '../monthNav.js';
 import { openPrepareWizard } from '../prepare.js';
-import { monthIsPrepared } from '../monthEngine.js';
+import { monthIsPrepared, addTemplateToMonth } from '../monthEngine.js';
 import { navigate } from '../app.js';
 import { bucketChip, freePseudoCategory, payerChip, georgiaChip, categoryChips, TEMPLATE_GROUPS, groupOfTemplate, categoryOptions, PAYER_LABELS } from '../components.js';
 
@@ -155,6 +155,17 @@ export function renderTemplates(root) {
         draw();
       });
 
+      const curKey = monthKey();
+      const inCurrent = !!state.months[curKey]?.transactions.some(t => t.templateId === tpl.id);
+      const addMonthBtn = el('button', { class: 'icon-btn', 'aria-label': `${monthLabel(curKey)}-ში დამატება`, title: inCurrent ? `${monthLabel(curKey)}-ში უკვე არის` : `${monthLabel(curKey)}-ში დამატება ახლავე`, text: inCurrent ? '✓' : '＋' });
+      addMonthBtn.disabled = inCurrent;
+      addMonthBtn.addEventListener('click', () => {
+        let ok = false;
+        updateState(draft => { ok = addTemplateToMonth(draft, tpl.id, curKey); return draft; });
+        toast(ok ? `„${tpl.name}" დაემატა ${monthLabel(curKey)}-ში ✓` : 'უკვე არის ამ თვეში');
+        draw();
+      });
+
       const editBtn = el('button', { class: 'icon-btn', 'aria-label': 'რედაქტირება', text: '✎' });
       editBtn.addEventListener('click', () => openTemplateForm(tpl, draw));
 
@@ -178,7 +189,7 @@ export function renderTemplates(root) {
         draw();
       });
 
-      actions.append(toggleBtn, editBtn, deleteBtn);
+      actions.append(addMonthBtn, toggleBtn, editBtn, deleteBtn);
       row.append(main, amount, actions);
       list.appendChild(row);
     }
@@ -284,6 +295,25 @@ function openTemplateForm(existing, onSaved) {
     el('span', { text: 'ცვლილება აისახოს უკვე შექმნილ, გადაუხდელ ტრანზაქციებზეც (მიმდინარე და მომავალი თვეები). გადახდილი და წარსული თვეები არ შეიცვლება.' })
   ]) : null;
 
+  // "Also add it to this month": a new expense usually starts right now.
+  const addNowBox = el('input', { type: 'checkbox' });
+  const addNowMonth = el('input', { type: 'month', value: monthKey(), class: 'inline-month' });
+  const alreadyIn = (k) => !!existing && !!getState().months[k]?.transactions.some(t => t.templateId === existing.id);
+  addNowBox.checked = !isEdit;
+  const addNowLabel = el('span', {});
+  const syncAddNow = () => {
+    const k = addNowMonth.value;
+    addNowLabel.textContent = alreadyIn(k) ? ' — ამ თვეში უკვე არის ✓' : '';
+    addNowBox.disabled = alreadyIn(k);
+  };
+  addNowMonth.addEventListener('change', syncAddNow);
+  syncAddNow();
+  const addNowField = el('label', { class: 'field checkbox-field add-now' }, [
+    addNowBox,
+    el('span', {}, [el('strong', { text: '📅 ამ თვეშიც დაემატოს: ' }), addNowMonth, addNowLabel,
+      el('div', { class: 'card__sub', text: 'ხარჯი მაშინვე გამოჩნდება ამ თვის ტრანზაქციებში (თუნდაც ციკლით მოგვიანებით იწყებოდეს).' })])
+  ]);
+
   form.append(
     labeledField('სახელი', nameField),
     labeledField('კატეგორია', categorySelect),
@@ -296,7 +326,8 @@ function openTemplateForm(existing, onSaved) {
     labeledField('ციკლი', cycleSelect),
     labeledField('პირველი გადახდა', dateInput),
     labeledField('ვინ იხდის (ვისი ანგარიშიდან იჭრება)', accountSelect),
-    applyField
+    applyField,
+    addNowField
   );
 
   const actions = el('div', { class: 'btn-row' });
@@ -320,7 +351,10 @@ function openTemplateForm(existing, onSaved) {
     const cycleMonths = oneTime ? 1 : Number(cycleSelect.value);
 
     let updatedCount = 0;
+    let addedTo = null;
+    const addKey = /^\d{4}-\d{2}$/.test(addNowMonth.value) ? addNowMonth.value : monthKey();
     updateState(draft => {
+      let savedId = existing?.id;
       if (isEdit) {
         const t = draft.templates.find(x => x.id === existing.id);
         Object.assign(t, {
@@ -341,15 +375,21 @@ function openTemplateForm(existing, onSaved) {
           });
         }
       } else {
+        savedId = uid('tpl');
         draft.templates.push({
-          id: uid('tpl'), name, categoryId: categorySelect.value, type: typeSelect.value,
+          id: savedId, name, categoryId: categorySelect.value, type: typeSelect.value,
           amount, currency: currencySelect.value, cycleMonths,
           firstDueDate: dateInput.value, owner: accountSelect.value, account: accountSelect.value, toGeorgia: georgiaBox.checked, active: true, oneTime
         });
       }
+      if (addNowBox.checked && !addNowBox.disabled && addTemplateToMonth(draft, savedId, addKey)) addedTo = addKey;
       return draft;
     });
-    toast(updatedCount ? `შენახულია ✓ — განახლდა ${updatedCount} ტრანზაქცია` : 'შენახულია ✓');
+    toast([
+      'შენახულია ✓',
+      updatedCount ? `განახლდა ${updatedCount} ტრანზაქცია` : '',
+      addedTo ? `დაემატა ${monthLabel(addedTo)}-ში` : ''
+    ].filter(Boolean).join(' — '));
     close();
     onSaved();
   });

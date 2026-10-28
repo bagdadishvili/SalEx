@@ -22,12 +22,17 @@ const SYNC_KEY = 'familyBudget.sync.v1';
 const GIST_FILENAME = 'family-budget-data.json';
 const GIST_DESCRIPTION = 'Family Budget app data (auto-synced, do not edit manually)';
 const API = 'https://api.github.com';
-const PUSH_DEBOUNCE_MS = 2000;
-const AUTO_PULL_INTERVAL_MS = 60000;
+const PUSH_DEBOUNCE_MS = 800;
+// "Live" mode: while the app is on screen it asks GitHub every few seconds whether the
+// cloud copy changed. These are conditional requests (ETag / If-None-Match): "nothing new"
+// answers (HTTP 304) are free and don't count against GitHub's rate limit.
+const LIVE_POLL_MS = 5000;
 const SHRINK_MIN_WEIGHT = 5;   // guard only kicks in when the bigger side has real data
 const SHRINK_RATIO = 0.5;      // ...and the other side has less than half of it
 
 let pushTimer = null;
+let etag = null;          // ETag of the cloud copy we last saw
+let syncedLocalAt = null; // local updatedAt at the last successful sync (=> nothing to upload)
 let intervalId = null;
 let autoSyncStarted = false;
 let queue = Promise.resolve();
@@ -126,7 +131,30 @@ function parseRemote(text) {
 }
 
 async function fetchRemote(token, gistId) {
-  return parseRemote(await fileContent(await api(`/gists/${gistId}`, { token })));
+  const r = await fetchRemoteIfChanged(token, gistId, null);
+  return r.remote;
+}
+
+/** Conditional GET: { changed:false } when the cloud copy is unchanged (HTTP 304), else { changed:true, remote }. */
+async function fetchRemoteIfChanged(token, gistId, knownEtag) {
+  const headers = { Authorization: `token ${token}`, Accept: 'application/vnd.github+json' };
+  if (knownEtag) headers['If-None-Match'] = knownEtag;
+  let res;
+  try {
+    res = await fetch(`${API}/gists/${gistId}`, { headers, cache: 'no-store' });
+  } catch {
+    throw new Error('ინტერნეტთან კავშირი ვერ მოხერხდა');
+  }
+  if (res.status === 304) return { changed: false };
+  if (!res.ok) {
+    const err = new Error(httpMessage(res.status));
+    err.status = res.status;
+    throw err;
+  }
+  const newEtag = res.headers && typeof res.headers.get === 'function' ? res.headers.get('ETag') : null;
+  const remote = parseRemote(await fileContent(await res.json()));
+  etag = newEtag || null;
+  return { changed: true, remote };
 }
 
 function todayKey() {
@@ -176,16 +204,18 @@ function block(kind, local, remote) {
  * prefer: null (automatic MERGE) | 'local' (upload this device as-is) | 'remote' (take the cloud as-is)
  * allowShrink: user explicitly confirmed a big data reduction.
  */
-async function reconcile({ prefer = null, allowShrink = false, backup = false } = {}) {
+async function reconcile({ prefer = null, allowShrink = false, backup = false, prefetched } = {}) {
   const cfg = getSyncConfig();
   if (!isConfigured(cfg)) { setStatus({ state: 'off', blocked: null }); return { action: 'off' }; }
   setStatus({ state: 'syncing', message: '' });
 
-  const remote = await fetchRemote(cfg.token, cfg.gistId);
+  const remote = prefetched !== undefined ? prefetched : await fetchRemote(cfg.token, cfg.gistId);
   const local = getState();
   const done = (action) => {
     saveSyncConfig({ lastSyncedAt: nowIso() });
-    setStatus({ state: 'ok', blocked: null, lastResult: action });
+    syncedLocalAt = getState().updatedAt;
+    if (action === 'pushed' || action === 'merged') etag = null; // our own upload changed the cloud copy
+    setStatus({ state: 'ok', blocked: null, lastResult: action, at: nowIso() });
     return { action };
   };
 
@@ -222,7 +252,17 @@ function autoRun() {
     setStatus({ state: 'offline' });
     return Promise.resolve(null);
   }
-  return serialize(() => reconcile()).catch(e => {
+  return serialize(async () => {
+    const localDirty = getState().updatedAt !== syncedLocalAt;
+    if (!localDirty && etag && status.state === 'ok') {
+      // Fast path: nothing to upload — just ask "did the cloud change?" (free when it didn't).
+      const cfg = getSyncConfig();
+      const r = await fetchRemoteIfChanged(cfg.token, cfg.gistId, etag);
+      if (!r.changed) return { action: 'none' };
+      return reconcile({ prefetched: r.remote });
+    }
+    return reconcile();
+  }).catch(e => {
     setStatus({ state: 'error', message: e.message });
     return null;
   });
@@ -322,6 +362,8 @@ export function backupNow() {
 }
 
 export function disconnect() {
+  etag = null;
+  syncedLocalAt = null;
   saveSyncConfig({ token: '', gistId: null, lastSyncedAt: null });
   setStatus({ state: 'off', blocked: null, message: '' });
 }
@@ -352,7 +394,7 @@ export async function restoreCloudVersion(version) {
 
 // ---------------- auto sync ----------------
 
-/** Wires auto-push (on local changes) and auto-pull (load, focus, online, every minute). Call once. */
+/** Wires auto-push (on local changes) and live auto-pull (load, focus, online, every few seconds while visible). Call once. */
 export function initAutoSync() {
   if (autoSyncStarted) return;
   autoSyncStarted = true;
@@ -369,7 +411,10 @@ export function initAutoSync() {
   if (typeof window !== 'undefined' && window.addEventListener) {
     window.addEventListener('online', () => autoRun());
   }
-  intervalId = setInterval(autoRun, AUTO_PULL_INTERVAL_MS);
+  intervalId = setInterval(() => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    autoRun();
+  }, LIVE_POLL_MS);
 }
 
 /** For tests only. */
