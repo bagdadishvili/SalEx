@@ -71,6 +71,12 @@ export function stampChanges(prev, next, now = new Date().toISOString()) {
     stampHead(pm, m, now);
     stampList(pm ? pm.transactions : [], m.transactions, deleted, now);
   });
+  // A whole month deleted by the user: tombstone the month and each of its transactions.
+  Object.entries(prev.months || {}).forEach(([key, pm]) => {
+    if (next.months && next.months[key]) return;
+    deleted[`month:${key}`] = now;
+    stampList(pm.transactions, [], deleted, now);
+  });
   pruneTombstones(deleted, now);
   return next;
 }
@@ -196,9 +202,16 @@ export function mergeStates(a, b) {
   [...keys].sort().forEach(k => {
     const ma = A.months && A.months[k];
     const mb = B.months && B.months[k];
-    const headSrc = mergeHead(ma && monthHead(ma), mb && monthHead(mb));
+    const tomb = deleted[`month:${k}`];
+    const alive = (m) => m && (!tomb || (m._u || EPOCH) > tomb);
+    const ha = alive(ma) ? monthHead(ma) : null;
+    const hb = alive(mb) ? monthHead(mb) : null;
     const txns = dedupeGenerated(mergeList(ma ? ma.transactions : [], mb ? mb.transactions : [], deleted));
+    if (tomb && !ha && !hb && !txns.length) return; // month deleted on one of the devices
+    const headSrc = (ha || hb) ? mergeHead(ha, hb)
+      : { exchangeRate: 3, income: { giorgi: 0, nino: 0 }, plannedSavings: null, generatedFromTemplates: false, skipTemplates: [], _u: EPOCH, _uf: {} };
     months[k] = { ...headSrc, transactions: txns };
+    if (tomb && (ha || hb)) delete deleted[`month:${k}`]; // re-opened after the deletion: forget the tombstone
   });
 
   const newerState = (A.updatedAt || EPOCH) >= (B.updatedAt || EPOCH) ? A : B;

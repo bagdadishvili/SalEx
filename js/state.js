@@ -5,7 +5,7 @@ import { saveSnapshot, summarizeState } from './backup.js';
 import { stampChanges, restampAll, fillMissingStamps, EPOCH } from './records.js';
 
 const STORAGE_KEY = 'familyBudget.v1';
-const CURRENT_VERSION = 5;
+const CURRENT_VERSION = 6;
 const SAVE_DEBOUNCE_MS = 300;
 const FREE_BUCKET_ID = 'free';
 // A freshly seeded (never edited) state carries this timestamp, so it can never look
@@ -48,6 +48,7 @@ function seedState() {
       contributionBasis: 'actual',
       rateAuto: true,
       hiddenCards: [],          // dashboard blocks the user switched off
+      texts: {},                // user's own names for cards/buttons/people (admin page)
       newMonthMode: 'wizard',   // 'wizard' = show the month-preparation screen; 'auto' = fill silently
       _u: EPOCH,
       planFree: {
@@ -212,6 +213,14 @@ function migrateV4ToV5(raw) {
   return raw;
 }
 
+/** v6: category owner (shared / giorgi / nino) and user-editable texts. Additive only. */
+function migrateV5ToV6(raw) {
+  (raw.categories || []).forEach(c => { if (!['shared', 'giorgi', 'nino'].includes(c.owner)) c.owner = 'shared'; });
+  if (raw.settings && (typeof raw.settings.texts !== 'object' || !raw.settings.texts)) raw.settings.texts = {};
+  raw.version = 6;
+  return raw;
+}
+
 /** v4: payment account on templates/transactions + per-record change stamps (for merge sync). */
 function migrateV3ToV4(raw) {
   (raw.templates || []).forEach(t => { if (!t.account) t.account = 'shared'; });
@@ -239,6 +248,9 @@ function migrate(raw) {
   if (raw.version < 5) {
     raw = migrateV4ToV5(raw);
   }
+  if (raw.version < 6) {
+    raw = migrateV5ToV6(raw);
+  }
 
   // Ensure required top-level shape even if partially corrupted.
   const seed = seedState();
@@ -255,12 +267,14 @@ function migrate(raw) {
   if (typeof raw.settings.rateAuto !== 'boolean') raw.settings.rateAuto = true;
   if (!Array.isArray(raw.settings.hiddenCards)) raw.settings.hiddenCards = [];
   if (!['wizard', 'auto'].includes(raw.settings.newMonthMode)) raw.settings.newMonthMode = 'wizard';
+  if (!raw.settings.texts || typeof raw.settings.texts !== 'object') raw.settings.texts = {};
   raw.categories = Array.isArray(raw.categories) && raw.categories.length ? raw.categories : seed.categories;
   raw.categories.forEach(c => {
     if (typeof c.percent !== 'number') c.percent = 0;
     if (!c.color) c.color = '#94a3b8';
     if (!c.goalType) c.goalType = 'max';
     if (c.parentId === undefined) c.parentId = null;
+    if (!['shared', 'giorgi', 'nino'].includes(c.owner)) c.owner = 'shared';
     c.georgiaTransfer = !!c.georgiaTransfer;
   });
   raw.templates = Array.isArray(raw.templates) ? raw.templates : [];
@@ -357,6 +371,11 @@ export function ensureMonth(target, key) {
       _u: EPOCH, // derived, not a user edit — must never beat real data in a merge
       transactions: []
     };
+    // Re-opening a month that was deleted earlier: it comes back (empty) on purpose.
+    if (obj.deleted && obj.deleted[`month:${key}`]) {
+      delete obj.deleted[`month:${key}`];
+      obj.months[key]._u = new Date().toISOString();
+    }
   }
   return obj.months[key];
 }

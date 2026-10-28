@@ -5,7 +5,7 @@
 import { getState, updateState, FREE_BUCKET_ID } from '../state.js';
 import { formatPercent } from '../calc.js';
 import { el, openModal, confirmDialog, toast } from '../ui.js';
-import { pickColor, COLOR_PRESETS, freePseudoCategory } from '../components.js';
+import { pickColor, COLOR_PRESETS, freePseudoCategory, PAYER_LABELS } from '../components.js';
 
 function uid(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -77,6 +77,7 @@ export function renderCategories(root) {
         ]),
         el('div', { class: 'row__meta' }, [
           isTop ? el('span', { class: 'chip', text: `${formatPercent(cat.percent, 0)} · ${cat.goalType === 'min' ? 'მინ.' : 'მაქს.'}` }) : null,
+          el('span', { class: 'chip chip--account', title: 'ვისია', text: `👤 ${PAYER_LABELS[cat.owner || 'shared']}` }),
           pLabel ? el('span', { class: 'chip', text: pLabel }) : null,
           el('span', { text: String(count) + ' ჩანაწ.' })
         ])
@@ -163,8 +164,13 @@ function openCategoryForm(existing, onSaved) {
     el('div', { style: 'display:flex;align-items:center;gap:8px' }, [colorBtn])
   ]);
 
+  // Whose is this category: both (shared 50/50) or one person's (e.g. "ინვესტიცია" = Nino's).
+  const ownerSelect = el('select', {}, ['shared', 'giorgi', 'nino'].map(v => el('option', { value: v, text: v === 'shared' ? `${PAYER_LABELS.shared} (ორივესი, 50/50)` : PAYER_LABELS[v] })));
+  ownerSelect.value = existing?.owner || 'shared';
+
   form.append(
     el('div', { class: 'field' }, [el('label', { text: 'სახელი' }), nameInput]),
+    el('div', { class: 'field' }, [el('label', { text: 'ვისია' }), ownerSelect]),
     el('div', { class: 'field' }, [el('label', { text: 'სად ჩაითვალოს' }), parentSelect]),
     percentField,
     goalField,
@@ -189,14 +195,14 @@ function openCategoryForm(existing, onSaved) {
     updateState(draft => {
       if (isEdit) {
         const c = draft.categories.find(x => x.id === existing.id);
-        Object.assign(c, { name, parentId, percent, goalType: goalSelect.value, color, georgiaTransfer: false });
+        Object.assign(c, { name, parentId, percent, goalType: goalSelect.value, color, georgiaTransfer: false, owner: ownerSelect.value });
         if (parentId) {
           // No longer a top-level block — drop from dashboard order.
           draft.settings.dashboardCardOrder = draft.settings.dashboardCardOrder.filter(k => k !== c.id);
         }
       } else {
         const id = uid('cat');
-        draft.categories.push({ id, name, parentId, percent, goalType: goalSelect.value, color, georgiaTransfer: false });
+        draft.categories.push({ id, name, parentId, percent, goalType: goalSelect.value, color, georgiaTransfer: false, owner: ownerSelect.value });
       }
       return draft;
     });

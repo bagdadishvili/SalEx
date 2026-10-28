@@ -6,6 +6,7 @@ import { openPrepareWizard, preparationPreview } from '../prepare.js';
 import { monthLabelFull } from '../monthNav.js';
 import { txnAmountEur, txnPlannedEur, txnPaidEur, topIdOf, resolveTopCategory, formatMoney, parseAmountInput, isEnvelope, envelopeSpent, ACCOUNT_LABELS } from '../calc.js';
 import { openEnvelopeDialog } from '../envelope.js';
+import { t, tx, personName } from '../texts.js';
 import { fetchEurGelRate } from '../rates.js';
 import { el, openModal, confirmDialog, toast, undoToast, formatDate } from '../ui.js';
 import { getSelectedMonth, onMonthChange } from '../monthNav.js';
@@ -36,8 +37,8 @@ export function renderTransactions(root) {
   container.appendChild(monthNav);
 
   const toolbar = el('div', { class: 'btn-row' });
-  const addBtn = el('button', { class: 'btn btn--primary', text: '+ ახალი ხარჯი' });
-  const regenBtn = el('button', { class: 'btn btn--secondary', text: '📅 თვის მომზადება' });
+  const addBtn = el('button', { class: 'btn btn--primary', ...tx('btn.newExpense') });
+  const regenBtn = el('button', { class: 'btn btn--secondary', ...tx('btn.prepare') });
   toolbar.append(addBtn, regenBtn);
   container.appendChild(toolbar);
   const prepBanner = el('div', {});
@@ -45,25 +46,25 @@ export function renderTransactions(root) {
 
   const statusRow = el('div', { class: 'filter-row' });
   const statusBtns = {
-    all: filterBtn('ყველა', () => setStatusFilter('all')),
-    unpaid: filterBtn('გადაუხდელი', () => setStatusFilter('unpaid')),
-    paid: filterBtn('გადახდილი', () => setStatusFilter('paid'))
+    all: filterBtn(t('filter.all'), () => setStatusFilter('all'), 'filter.all'),
+    unpaid: filterBtn(t('filter.unpaid'), () => setStatusFilter('unpaid'), 'filter.unpaid'),
+    paid: filterBtn(t('filter.paid'), () => setStatusFilter('paid'), 'filter.paid')
   };
   statusRow.append(statusBtns.all, statusBtns.unpaid, statusBtns.paid);
   container.appendChild(statusRow);
 
   const ownerRow = el('div', { class: 'filter-row' });
   const ownerBtns = {
-    all: filterBtn('👤 ყველა', () => setOwnerFilter('all')),
-    giorgi: filterBtn('გიორგი', () => setOwnerFilter('giorgi')),
-    nino: filterBtn('ნინო', () => setOwnerFilter('nino')),
-    shared: filterBtn('საერთო', () => setOwnerFilter('shared'))
+    all: filterBtn(`👤 ${t('filter.all')}`, () => setOwnerFilter('all')),
+    giorgi: filterBtn(personName('giorgi'), () => setOwnerFilter('giorgi'), 'person.giorgi'),
+    nino: filterBtn(personName('nino'), () => setOwnerFilter('nino'), 'person.nino'),
+    shared: filterBtn(personName('shared'), () => setOwnerFilter('shared'), 'person.shared')
   };
   ownerRow.append(ownerBtns.all, ownerBtns.giorgi, ownerBtns.nino, ownerBtns.shared);
   container.appendChild(ownerRow);
 
   const groupRow = el('div', { class: 'filter-row' });
-  const groupToggle = el('button', { class: 'filter-btn', text: 'დაჯგუფება კატეგორიით' });
+  const groupToggle = el('button', { class: 'filter-btn', ...tx('btn.groupByCategory') });
   groupRow.appendChild(groupToggle);
   container.appendChild(groupRow);
 
@@ -146,14 +147,26 @@ export function renderTransactions(root) {
     }
 
     if (!groupByBucket) {
-      txns.forEach(t => list.appendChild(txnRow(t, month, categories, draw)));
+      txns.forEach(tr => list.appendChild(txnRow(tr, month, categories, draw)));
     } else {
-      const bucketList = [...categories.filter(c => !c.parentId), freePseudoCategory()];
-      bucketList.forEach(b => {
-        const group = txns.filter(t => topIdOf(categories, t.categoryId) === b.id);
+      // One group per category (as in the "კატეგორიები" page), with count and sum.
+      const order = [];
+      categories.filter(c => !c.parentId).forEach(top => {
+        order.push(top);
+        categories.filter(c => c.parentId === top.id).forEach(ch => order.push(ch));
+      });
+      categories.filter(c => c.parentId === FREE_BUCKET_ID).forEach(c => order.push(c));
+      categories.forEach(c => { if (!order.includes(c)) order.push(c); });
+      const unknown = { id: '__none', name: 'კატეგორიის გარეშე' };
+      [...order, unknown].forEach(cat => {
+        const group = txns.filter(tr => (cat === unknown ? !categories.some(c => c.id === tr.categoryId) : tr.categoryId === cat.id));
         if (!group.length) return;
-        list.appendChild(el('div', { class: 'card__sub', style: 'margin-top:12px;font-weight:700', text: b.name }));
-        group.forEach(t => list.appendChild(txnRow(t, month, categories, draw)));
+        const sum = group.reduce((acc, tr) => acc + txnPlannedEur(tr, month.exchangeRate), 0);
+        list.appendChild(el('div', { class: 'txn-group-title' }, [
+          el('span', {}, [cat.color ? el('span', { class: 'color-dot', style: `background:${cat.color}` }) : null, ` ${cat.name}`]),
+          el('span', { class: 'tabular-nums', text: `${group.length} · ${formatMoney(sum, 'EUR', 0)}` })
+        ]));
+        group.forEach(tr => list.appendChild(txnRow(tr, month, categories, draw)));
       });
     }
   }
@@ -161,8 +174,8 @@ export function renderTransactions(root) {
   draw();
 }
 
-function filterBtn(label, onClick) {
-  const btn = el('button', { class: 'filter-btn', text: label, 'aria-pressed': 'false' });
+function filterBtn(label, onClick, tkey) {
+  const btn = el('button', { class: 'filter-btn', text: label, 'aria-pressed': 'false', ...(tkey ? { 'data-tkey': tkey } : {}) });
   btn.addEventListener('click', onClick);
   return btn;
 }
@@ -204,40 +217,7 @@ function txnRow(txn, month, categories, refresh) {
 
   const actions = el('div', { class: 'row__actions' });
 
-  const payBtn = el('button', {
-    class: 'icon-btn',
-    'aria-label': txn.paid ? 'გადაუხდელად დაბრუნება' : 'გადახდილად მონიშვნა',
-    text: txn.paid ? '↩' : '✓'
-  });
-  if (envelope) {
-    payBtn.setAttribute('aria-label', 'ხარჯის ან ნაშთის ჩაწერა');
-    payBtn.textContent = '＋';
-  }
-  payBtn.addEventListener('click', () => {
-    if (envelope) { openEnvelopeDialog(txn.id, refresh); return; }
-    if (txn.paid) {
-      updateState(draft => {
-        const t = findTxn(draft, txn.id);
-        t.paid = false; t.paidAt = null; t.rateAtPayment = null;
-        return draft;
-      });
-      toast('გადაუხდელად აღინიშნა');
-      refresh();
-      return;
-    }
-    if (txnIsVariable(txn) || txn.currency === 'GEL') {
-      openActualAmountDialog(txn, () => refresh());
-    } else {
-      updateState(draft => {
-        const t = findTxn(draft, txn.id);
-        t.paid = true; t.paidAt = todayISO(); t.rateAtPayment = t.currency === 'GEL' ? month.exchangeRate : null;
-        t.amountActual = t.amountActual ?? t.amountPlanned;
-        return draft;
-      });
-      toast('გადახდილად აღინიშნა ✓');
-      refresh();
-    }
-  });
+  const payBtn = payButton(txn, month, refresh);
 
   const editBtn = el('button', { class: 'icon-btn', 'aria-label': 'რედაქტირება', text: '✎' });
   editBtn.addEventListener('click', () => openTransactionForm(txn, monthKeyOf(month), refresh));
@@ -278,6 +258,55 @@ function txnRow(txn, month, categories, refresh) {
   actions.append(payBtn, editBtn, deleteBtn);
   row.append(main, amount, actions);
   return row;
+}
+
+/**
+ * Clear pay control: "○ გადახდა" (outlined) → tap marks paid; "✓ გადახდილია" (green) → tap
+ * marks unpaid again, with an undo. Envelopes get "＋ ხარჯი". Used here and on dashboard cards.
+ */
+export function payButton(txn, month, refresh) {
+  const envelope = isEnvelope(txn);
+  if (envelope) {
+    const b = el('button', { type: 'button', class: 'pay-btn pay-btn--envelope', 'aria-label': 'ხარჯის ან ნაშთის ჩაწერა', text: '＋ ხარჯი' });
+    b.addEventListener('click', (e) => { e.stopPropagation(); openEnvelopeDialog(txn.id, refresh); });
+    return b;
+  }
+  const b = el('button', {
+    type: 'button',
+    class: 'pay-btn' + (txn.paid ? ' pay-btn--done' : ''),
+    'aria-label': txn.paid ? 'გადახდილია — დააჭირე გასაუქმებლად' : 'გადახდილად მონიშვნა',
+    text: txn.paid ? t('btn.paid') : `○ ${t('btn.pay')}`
+  });
+  b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (txn.paid) {
+      const before = { paid: txn.paid, paidAt: txn.paidAt, rateAtPayment: txn.rateAtPayment, amountActual: txn.amountActual };
+      updateState(draft => {
+        const tr = findTxn(draft, txn.id);
+        tr.paid = false; tr.paidAt = null; tr.rateAtPayment = null;
+        return draft;
+      });
+      undoToast('გადაუხდელად აღინიშნა', () => {
+        updateState(draft => { Object.assign(findTxn(draft, txn.id), before); return draft; });
+        refresh();
+      });
+      refresh();
+      return;
+    }
+    if (txnIsVariable(txn) || txn.currency === 'GEL') {
+      openActualAmountDialog(txn, () => refresh());
+    } else {
+      updateState(draft => {
+        const tr = findTxn(draft, txn.id);
+        tr.paid = true; tr.paidAt = todayISO(); tr.rateAtPayment = null;
+        tr.amountActual = tr.amountActual ?? tr.amountPlanned;
+        return draft;
+      });
+      toast('გადახდილად აღინიშნა ✓');
+      refresh();
+    }
+  });
+  return b;
 }
 
 function txnIsVariable(txn) {
@@ -369,15 +398,15 @@ function openActualAmountDialog(txn, onDone) {
   });
 }
 
-function openTransactionForm(existing, monthKeyStr, onSaved) {
+export function openTransactionForm(existing, monthKeyStr, onSaved, presets = {}) {
   const state = getState();
   const isEdit = !!existing;
   const form = el('form', {});
 
   const nameInput = el('input', { type: 'text', value: existing?.name || '' });
-  const categorySelect = categoryOptions(state.categories, existing?.categoryId);
+  const categorySelect = categoryOptions(state.categories, existing?.categoryId || presets.categoryId);
   const georgiaBox = el('input', { type: 'checkbox' });
-  georgiaBox.checked = !!existing?.toGeorgia;
+  georgiaBox.checked = !!(existing ? existing.toGeorgia : presets.toGeorgia);
   if (existing) categorySelect.value = existing.categoryId;
 
   const currencySelect = el('select', {}, [el('option', { value: 'EUR', text: 'EUR' }), el('option', { value: 'GEL', text: 'GEL' })]);

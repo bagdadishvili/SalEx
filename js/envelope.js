@@ -77,6 +77,22 @@ export function openEnvelopeDialog(txnId, onDone = () => {}) {
     form.appendChild(el('details', { class: 'help-details' }, [el('summary', { text: `ბოლო ჩანაწერები (${txn.spends.length})` }), list]));
   }
 
+  // Per-envelope switch: show "per day" on the dashboard (remembered on its template too).
+  const dailyBox = el('input', { type: 'checkbox' });
+  dailyBox.checked = txn.dailyHint !== false;
+  dailyBox.addEventListener('change', () => {
+    updateState(d => {
+      const tr = findTxn(d, txnId);
+      tr.dailyHint = dailyBox.checked;
+      const tpl = tr.templateId && d.templates.find(x => x.id === tr.templateId);
+      if (tpl) tpl.dailyHint = dailyBox.checked;
+      return d;
+    });
+    toast(dailyBox.checked ? 'დღიური თანხა ჩაირთო' : 'დღიური თანხა გამოირთო');
+    onDone();
+  });
+  form.appendChild(el('label', { class: 'field checkbox-field' }, [dailyBox, el('span', { text: '📆 დეშბორდზე „დღეში ≈ X" ჩვენება ამ ბიუჯეტისთვის' })]));
+
   const actions = el('div', { class: 'btn-row' });
   const save = el('button', { class: 'btn btn--primary', type: 'submit', text: 'შენახვა' });
   const closeBtn = el('button', { class: 'btn btn--ghost btn--sm', type: 'button', text: txn.paid ? '↩ ხელახლა გახსნა' : '✓ თვე დაიხურა' });

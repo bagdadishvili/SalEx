@@ -4,6 +4,7 @@ import { el, openModal } from './ui.js';
 import { getSelectedMonth, setSelectedMonth, shiftSelectedMonth, MONTH_NAMES_SHORT } from './monthNav.js';
 import { monthKey, FREE_BUCKET_ID } from './state.js';
 import { resolveTopCategory } from './calc.js';
+import { personName } from './texts.js';
 
 const YEAR_RANGE_BACK = 3;
 const YEAR_RANGE_FWD = 4;
@@ -129,7 +130,12 @@ export { hexToRgb };
 
 // ---------------- shared labels (one place, so every page says the same thing) ----------------
 
-export const PAYER_LABELS = { shared: 'საერთო', giorgi: 'გიორგი', nino: 'ნინო' };
+// Names come from the editable texts (admin page), so "გიორგი"/"ნინო" can be renamed.
+export const PAYER_LABELS = {
+  get shared() { return personName('shared'); },
+  get giorgi() { return personName('giorgi'); },
+  get nino() { return personName('nino'); }
+};
 
 /** "👤 გიორგი" — who pays (from whose bank account). */
 export function payerChip(account) {

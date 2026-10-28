@@ -9,6 +9,8 @@ import { getSelectedMonth, setSelectedMonth, monthLabel, shiftMonthKey } from '.
 import { openPrepareWizard } from '../prepare.js';
 import { monthIsPrepared, addTemplateToMonth } from '../monthEngine.js';
 import { navigate } from '../app.js';
+import { tx } from '../texts.js';
+import { getUiPref, setUiPref } from '../monthNav.js';
 import { bucketChip, freePseudoCategory, payerChip, georgiaChip, categoryChips, TEMPLATE_GROUPS, groupOfTemplate, categoryOptions, PAYER_LABELS } from '../components.js';
 
 function bucketOfCategory(state, category) {
@@ -48,10 +50,10 @@ export function renderTemplates(root) {
   root.appendChild(container);
 
   const header = el('div', { class: 'btn-row' });
-  const addBtn = el('button', { class: 'btn btn--primary', text: '+ ახალი შაბლონი' });
+  const addBtn = el('button', { class: 'btn btn--primary', ...tx('btn.newTemplate') });
 
   // Visual month preparation: opens on the current month if it isn't prepared yet, else the next one.
-  const nextBtn = el('button', { class: 'btn btn--secondary', text: '📅 თვის მომზადება' });
+  const nextBtn = el('button', { class: 'btn btn--secondary', ...tx('btn.prepare') });
   nextBtn.addEventListener('click', () => {
     const cur = monthKey();
     const target = monthIsPrepared(getState(), cur) ? shiftMonthKey(cur, 1) : cur;
@@ -87,6 +89,25 @@ export function renderTemplates(root) {
     text: 'შაბლონი = ყოველთვიური (ან 2/3/6/12 თვეში ერთხელ) ხარჯის ნიმუში. ყოველი თვის დასაწყისში „📅 თვის მომზადება" გაჩვენებს, რომელი შაბლონები მოდის იმ თვეში — მონიშნავ, საჭიროებისამებრ შეცვლი თანხას და ერთი დაჭერით შექმნი. შექმნილი ხარჯები გადახდამდე თავისუფლად რედაქტირდება.'
   }));
 
+  // ---- filter & sort (remembered on this device) ----
+  const f = Object.assign({ q: '', group: 'all', payer: 'all', status: 'active', sort: 'group' }, getUiPref('tplFilter', {}));
+  const save = () => { setUiPref('tplFilter', f); draw(); };
+  const search = el('input', { type: 'search', class: 'tpl-search', placeholder: '🔍 ძებნა სახელით…', value: f.q });
+  search.addEventListener('input', () => { f.q = search.value; save(); });
+  const sel = (key, options) => {
+    const s1 = el('select', { class: 'tpl-select' }, options.map(([v, label]) => el('option', { value: v, text: label })));
+    s1.value = f[key];
+    s1.addEventListener('change', () => { f[key] = s1.value; save(); });
+    return s1;
+  };
+  container.appendChild(el('div', { class: 'tpl-toolbar' }, [
+    search,
+    sel('group', [['all', 'ყველა ჯგუფი'], ...TEMPLATE_GROUPS.map(([k, title]) => [k, title])]),
+    sel('payer', [['all', '👤 ყველა'], ['shared', `👤 ${PAYER_LABELS.shared}`], ['giorgi', `👤 ${PAYER_LABELS.giorgi}`], ['nino', `👤 ${PAYER_LABELS.nino}`]]),
+    sel('status', [['active', 'მხოლოდ ჩართული'], ['inactive', 'მხოლოდ გამორთული'], ['all', 'ჩართული + გამორთული']]),
+    sel('sort', [['group', '↕ ჯგუფებით'], ['name', '↕ სახელით (ა-ჰ)'], ['amountDesc', '↕ თანხით (დიდიდან)'], ['amountAsc', '↕ თანხით (პატარიდან)'], ['next', '↕ შემდეგი გადახდით']])
+  ]));
+
   const list = el('div', { class: 'list' });
   container.appendChild(list);
 
@@ -106,13 +127,31 @@ export function renderTemplates(root) {
     const active = state.templates.filter(t => t.active);
     list.appendChild(el('div', { class: 'tpl-summary tabular-nums', text: `${active.length} აქტიური შაბლონი · თვეში საშუალოდ ≈ ${formatMoney(active.reduce((s, t) => s + monthlyEur(t), 0), 'EUR', 0)}` }));
 
-    TEMPLATE_GROUPS.forEach(([groupKey, groupTitle]) => {
-      const inGroup = state.templates.filter(t => groupOfTemplate(state.categories, t) === groupKey);
-      if (!inGroup.length) return;
-      const groupTotal = inGroup.filter(t => t.active).reduce((s, t) => s + monthlyEur(t), 0);
-      list.appendChild(el('div', { class: 'tpl-group-title' }, [el('div', { text: groupTitle }), el('span', { class: 'tabular-nums', text: `≈ ${formatMoney(groupTotal, 'EUR', 0)} / თვე` })]));
-      inGroup.forEach(tpl => renderRow(tpl, groupKey));
-    });
+    const q = f.q.trim().toLowerCase();
+    const shown = state.templates.filter(tp =>
+      (!q || tp.name.toLowerCase().includes(q)) &&
+      (f.group === 'all' || groupOfTemplate(state.categories, tp) === f.group) &&
+      (f.payer === 'all' || (tp.account || 'shared') === f.payer) &&
+      (f.status === 'all' || (f.status === 'active' ? tp.active : !tp.active)));
+    if (!shown.length) list.appendChild(el('div', { class: 'empty-state', text: 'ფილტრს არაფერი შეესაბამება' }));
+    const eurOf = (tp) => (tp.currency === 'GEL' ? gelToEur(tp.amount, previewRate) : tp.amount);
+    if (f.sort === 'group') {
+      TEMPLATE_GROUPS.forEach(([groupKey, groupTitle]) => {
+        const inGroup = shown.filter(tp => groupOfTemplate(state.categories, tp) === groupKey);
+        if (!inGroup.length) return;
+        const groupTotal = inGroup.filter(tp => tp.active).reduce((acc, tp) => acc + monthlyEur(tp), 0);
+        list.appendChild(el('div', { class: 'tpl-group-title' }, [el('div', { text: groupTitle }), el('span', { class: 'tabular-nums', text: `≈ ${formatMoney(groupTotal, 'EUR', 0)} / თვე · ${inGroup.length}` })]));
+        inGroup.forEach(tpl => renderRow(tpl, groupKey));
+      });
+    } else {
+      const sorted = shown.slice().sort((a, b) => {
+        if (f.sort === 'name') return a.name.localeCompare(b.name, 'ka');
+        if (f.sort === 'amountDesc') return eurOf(b) - eurOf(a);
+        if (f.sort === 'amountAsc') return eurOf(a) - eurOf(b);
+        return (nextDueMonth(a) || '9999').localeCompare(nextDueMonth(b) || '9999');
+      });
+      sorted.forEach(tpl => renderRow(tpl, null));
+    }
 
     function renderRow(tpl, groupKey) {
       const cat = state.categories.find(c => c.id === tpl.categoryId);

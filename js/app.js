@@ -1,10 +1,13 @@
 // app.js — entry point + router.
 
-import { loadState, getState, updateState, onStateReplaced, isPristine, deviceName } from './state.js';
+import { loadState, getState, updateState, onStateReplaced, isPristine, deviceName, setDeviceName } from './state.js';
+import { confirmDialog } from './ui.js';
 import { runSelfChecks } from './calc.js';
 import { saveSnapshotIfDue } from './backup.js';
 import * as sync from './sync.js';
-import { toast } from './ui.js';
+import { toast, openModal, el } from './ui.js';
+import { t, installTextEditing, onTextEditMode, setTextEditMode, defaultText } from './texts.js';
+import { renderAdmin } from './views/admin.js';
 import { renderDashboard } from './views/dashboard.js';
 import { renderTransactions } from './views/transactions.js';
 import { renderTemplates } from './views/templates.js';
@@ -16,7 +19,8 @@ const routes = {
   transactions: renderTransactions,
   templates: renderTemplates,
   categories: renderCategories,
-  settings: renderSettings
+  settings: renderSettings,
+  admin: renderAdmin
 };
 
 const viewRoot = document.getElementById('view-root');
@@ -36,13 +40,27 @@ export function navigate(route) {
   render(route);
 }
 
+/** Applies the user's own texts to the fixed parts of the page (title, tab bar). */
+function applyTexts() {
+  const title = document.querySelector('.app-header__title');
+  if (title) { title.textContent = t('app.title'); title.setAttribute('data-tkey', 'app.title'); }
+  tabBar.querySelectorAll('.tab-bar__item').forEach(btn => {
+    const label = btn.querySelector('.tab-bar__label');
+    if (!label) return;
+    const key = `tab.${btn.dataset.route}`;
+    label.textContent = t(key);
+    label.setAttribute('data-tkey', key);
+  });
+}
+
 function render(route) {
+  applyTexts();
   const scrollY = window.scrollY;
   const sameRoute = viewRoot.dataset.route === route;
   viewRoot.innerHTML = '';
   viewRoot.dataset.route = route;
   tabBar.querySelectorAll('.tab-bar__item').forEach(btn => {
-    if (btn.dataset.route === route) btn.setAttribute('aria-current', 'page');
+    if (btn.dataset.route === route || (route === 'admin' && btn.dataset.route === 'settings')) btn.setAttribute('aria-current', 'page');
     else btn.removeAttribute('aria-current');
   });
   routes[route](viewRoot);
@@ -215,7 +233,33 @@ async function requestPersistentStorage() {
   } catch { /* not supported */ }
 }
 
+/** "#connect=<token>&gist=<id>" link made on Giorgi's phone (Settings → 📲) for Nino's phone. */
+function takeConnectLink() {
+  const h = location.hash || '';
+  if (!h.startsWith('#connect=')) return null;
+  const params = new URLSearchParams(h.slice(1));
+  const token = params.get('connect');
+  const gist = params.get('gist') || '';
+  // Remove the secret from the address bar / history right away.
+  try { history.replaceState(null, '', `${location.pathname}${location.search}#dashboard`); } catch { location.hash = '#dashboard'; }
+  return token ? { token, gist } : null;
+}
+
+async function offerConnect({ token, gist }) {
+  const ok = await confirmDialog('დავაკავშირო ეს ტელეფონი ოჯახის ბიუჯეტთან? მონაცემები ავტომატურად ჩამოიტვირთება და შემდეგ ორივე ტელეფონი ერთად განახლდება.', { confirmLabel: 'დაკავშირება' });
+  if (!ok) return;
+  try {
+    const r = await sync.connect(token, gist);
+    if (!deviceName()) setDeviceName(t('person.nino'));
+    toast(r.action === 'conflict' ? 'დაკავშირებულია — აირჩიე როგორ გავაერთიანო (ზედა ზოლში)' : `დაკავშირებულია ✓ — ეს ტელეფონი: ${deviceName()} (შეცვლა: პარამეტრები → სინქრონიზაცია)`);
+    rerender();
+  } catch (e) {
+    toast('დაკავშირება ვერ მოხერხდა: ' + e.message, 'error');
+  }
+}
+
 function init() {
+  const connectLink = takeConnectLink();
   loadState();
   applyAppearance();
   checkBackupReminder();
@@ -231,6 +275,16 @@ function init() {
   window.addEventListener('hashchange', () => render(currentRouteFromHash()));
 
   render(currentRouteFromHash());
+
+  // "✎ edit texts" mode: tap any underlined text → rename it. A bar at the top ends the mode.
+  installTextEditing(askNewText, rerender);
+  const editBar = el('div', { class: 'text-edit-bar', hidden: 'true' }, [
+    el('span', { text: '✎ რედაქტირების რეჟიმი — შეეხე ხაზგასმულ ტექსტს' }),
+    el('button', { type: 'button', class: 'btn btn--primary btn--sm', text: 'დასრულება' })
+  ]);
+  editBar.querySelector('button').addEventListener('click', () => setTextEditMode(false));
+  document.body.appendChild(editBar);
+  onTextEditMode((on) => { editBar.hidden = !on; rerender(); });
 
   let pendingRerender = false;
   onStateReplaced((source) => {
@@ -257,10 +311,30 @@ function init() {
 
   sync.onSyncStatus(renderSyncUi);
   sync.initAutoSync();
+  if (connectLink) setTimeout(() => offerConnect(connectLink), 300);
+}
+
+function askNewText(key, current, def) {
+  return new Promise((resolve) => {
+    const input = el('input', { type: 'text', value: current, maxlength: '80' });
+    const form = el('form', {}, [
+      el('p', { class: 'card__sub', text: `საწყისი: „${def}"` }),
+      el('div', { class: 'field' }, [el('label', { text: 'ახალი ტექსტი' }), input])
+    ]);
+    const save = el('button', { class: 'btn btn--primary', type: 'submit', text: 'შენახვა' });
+    const reset = el('button', { class: 'btn btn--ghost', type: 'button', text: '↺ საწყისი' });
+    form.appendChild(el('div', { class: 'btn-row' }, [save, reset]));
+    let done = false;
+    const { close } = openModal(form, { title: '✎ ტექსტის შეცვლა', onClose: () => { if (!done) resolve(null); } });
+    setTimeout(() => { input.focus(); input.select(); }, 30);
+    form.addEventListener('submit', (e) => { e.preventDefault(); done = true; resolve(input.value); close(); toast('შენახულია ✓'); });
+    reset.addEventListener('click', () => { done = true; resolve(''); close(); toast('დაბრუნდა საწყისზე'); });
+    void defaultText;
+  });
 }
 
 /** Shown in Settings; bump together with CACHE_VERSION in sw.js. */
-export const APP_VERSION = '13';
+export const APP_VERSION = '14';
 
 export { applyAppearance, checkBackupReminder };
 

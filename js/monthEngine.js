@@ -22,6 +22,11 @@ export function initMonth(draft, key) {
       _u: EPOCH, // derived from the previous month, not a user edit
       transactions: []
     };
+    // Re-opening a month that was deleted earlier: it comes back (empty) on purpose.
+    if (draft.deleted && draft.deleted[`month:${key}`]) {
+      delete draft.deleted[`month:${key}`];
+      draft.months[key]._u = new Date().toISOString();
+    }
   }
   const m = draft.months[key];
   if (!Array.isArray(m.skipTemplates)) m.skipTemplates = [];
@@ -72,7 +77,7 @@ export function txnFromTemplate(tpl, key, { fresh = false } = {}) {
     // Generated = derived data: an old stamp, so a deletion on another device wins.
     _u: fresh ? undefined : EPOCH
   };
-  if (tpl.type === 'envelope') { t.kind = 'envelope'; t.spends = []; }
+  if (tpl.type === 'envelope') { t.kind = 'envelope'; t.spends = []; if (tpl.dailyHint === false) t.dailyHint = false; }
   if (t._u === undefined) delete t._u;
   return t;
 }

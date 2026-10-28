@@ -257,16 +257,28 @@ export function computeSalarySplit(month, categories, settings, overrides = {}) 
     plannedBy[top][acc] += eur;
   });
 
+  // A category can belong to both ("shared", split by `share`) or to one person (v14),
+  // e.g. "ინვესტიცია (ნინო)" is funded 100% by Nino.
   let spend = 0, spendBudget = 0, savings = 0;
   const debits = { shared: 0, giorgi: 0, nino: 0 };
+  const essBy = { giorgi: 0, nino: 0 };
+  const saveBy = { giorgi: 0, nino: 0 };
+  const addFor = (target, owner, amount) => {
+    if (owner === 'giorgi' || owner === 'nino') target[owner] += amount;
+    else { target.giorgi += amount * share.giorgi; target.nino += amount * share.nino; }
+  };
   tops.forEach(c => {
     const budget = T * (Number(c.percent) || 0) / 100;
     const p = plannedBy[c.id];
     if (c.goalType === 'min') {
-      savings += Math.max(budget, p.total);
+      const amount = Math.max(budget, p.total);
+      savings += amount;
+      addFor(saveBy, c.owner, amount);
     } else {
       spendBudget += budget;
-      spend += basis === 'plan' ? Math.max(budget, p.total) : p.total;
+      const amount = basis === 'plan' ? Math.max(budget, p.total) : p.total;
+      spend += amount;
+      addFor(essBy, c.owner, amount);
       ACCOUNTS.forEach(a => { debits[a] += p[a]; });
     }
   });
@@ -274,8 +286,8 @@ export function computeSalarySplit(month, categories, settings, overrides = {}) 
 
   const persons = {};
   ['giorgi', 'nino'].forEach(p => {
-    const essentials = spend * share[p];
-    const save = savings * share[p];
+    const essentials = essBy[p];
+    const save = saveBy[p];
     const free = income[p] - essentials - save;
     const freeTarget = T * (Number(settings.planFree?.[p]?.percent) || 0) / 100;
     persons[p] = {
@@ -302,10 +314,16 @@ export function computeSalarySplit(month, categories, settings, overrides = {}) 
  * leftover = income − spent − saved (money not used at all)
  */
 export function computeYearOverview(months, categories, year) {
+  return computeRangeOverview(months, categories, `${year}-01`, `${year}-12`, year);
+}
+
+/** Same as the year overview, for any period fromKey..toKey (YYYY-MM, inclusive). */
+export function computeRangeOverview(months, categories, fromKey, toKey, year = null) {
   const minTops = new Set(categories.filter(c => !c.parentId && c.goalType === 'min').map(c => c.id));
   const rows = [];
-  for (let m = 1; m <= 12; m++) {
-    const key = `${year}-${String(m).padStart(2, '0')}`;
+  const keys = Object.keys(months).filter(k => k >= fromKey && k <= toKey).sort();
+  for (const key of keys) {
+    const m = Number(key.slice(5, 7));
     const month = months[key];
     if (!month) continue;
     let spent = 0, saved = 0, georgia = 0;
@@ -325,7 +343,7 @@ export function computeYearOverview(months, categories, year) {
   }, { income: 0, spent: 0, saved: 0, georgia: 0, leftover: 0 });
   const n = rows.length || 1;
   const average = Object.fromEntries(Object.entries(totals).map(([k, v]) => [k, v / n]));
-  return { year, rows, totals, average };
+  return { year, from: fromKey, to: toKey, rows, totals, average };
 }
 
 /** Plan-vs-actual rows: one per user bucket, plus the two free-money person splits. */
@@ -485,6 +503,11 @@ export function runSelfChecks() {
   assertClose('50/50 keep: giorgi to shared 400', keep.persons.giorgi.toShared, 400);
   assertClose('50/50 keep: nino to shared 800', keep.persons.nino.toShared, 800);
   assertClose('50/50 keep: giorgi keeps 400', keep.persons.giorgi.keepForDebits, 400);
+  // A savings category owned by one person (e.g. investment = Nino's): Nino funds all of it.
+  const invest = [...categories.map(c => c.id === 'cat_savings' ? { ...c, owner: 'nino' } : c)];
+  const inv = computeSalarySplit(sm, invest, { ...settings, contributionBasis: 'actual' });
+  assertClose('owner=nino: nino saves all 1000', inv.persons.nino.savings, 1000);
+  assertClose('owner=nino: giorgi saves 0', inv.persons.giorgi.savings, 0);
   assertClose('50/50 full: giorgi to shared 800', half.persons.giorgi.toShared, 800);
   assertClose('50/50 full: nino to shared 800', half.persons.nino.toShared, 800);
   assertClose('50/50 full: 400 back to giorgi', half.persons.giorgi.backFromShared, 400);

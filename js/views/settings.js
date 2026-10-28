@@ -5,9 +5,14 @@ import { sumAllPercents, effectiveCardOrder } from '../calc.js';
 import { el, confirmDialog, toast, openModal } from '../ui.js';
 import { listSnapshots, getSnapshotData, saveSnapshot, summarizeState, SNAPSHOT_REASONS } from '../backup.js';
 import { exportJson, importJson, exportCsv, importCsv } from '../exporter.js';
-import { applyAppearance, checkBackupReminder, APP_VERSION } from '../app.js';
+import { applyAppearance, checkBackupReminder, APP_VERSION, navigate } from '../app.js';
+import { monthKey } from '../state.js';
+import { setSelectedMonth, monthLabelFull } from '../monthNav.js';
+import { undoToast } from '../ui.js';
+import { shareJsonBackup, canShareFiles } from '../exporter.js';
 import { pickColor, COLOR_PRESETS } from '../components.js';
 import * as sync from '../sync.js';
+import { t } from '../texts.js';
 
 const CARD_LABELS = {
   summary: 'თვის მიმოხილვა', income: 'შემოსავალი', rate: 'კურსი', georgia: 'საქართველოში გადასარიცხი',
@@ -26,7 +31,7 @@ function fmtDateTime(iso) {
 }
 
 function cardLabel(state, key) {
-  if (CARD_LABELS[key]) return CARD_LABELS[key];
+  if (CARD_LABELS[key]) return t(`card.${key}`, CARD_LABELS[key]);
   return state.categories.find(c => c.id === key)?.name || key;
 }
 
@@ -34,11 +39,15 @@ export function renderSettings(root) {
   const container = el('div', { class: 'settings-view' });
   root.appendChild(container);
 
+  const adminBtn = el('button', { class: 'btn btn--primary', type: 'button', text: '🛠 ადმინი — ტექსტების და სახელების შეცვლა' });
+  adminBtn.addEventListener('click', () => navigate('admin'));
+  container.appendChild(el('div', { class: 'btn-row' }, [adminBtn]));
   container.appendChild(renderBuckets());
   container.appendChild(renderSplitSettings());
   container.appendChild(renderAppearance());
   container.appendChild(renderSync());
   container.appendChild(renderRestore());
+  container.appendChild(renderMonths());
   container.appendChild(renderDataSection());
   container.appendChild(renderDangerZone());
   container.appendChild(el('p', { class: 'version-note', text: `აპის ვერსია ${APP_VERSION} · მონაცემების ფორმატი v${getState().version}. აპის განახლება მონაცემებს არ შლის: ისინი ამ მოწყობილობაზე და ღრუბელშია, ფორმატის ცვლილებამდე კი ავტომატურად იქმნება აღდგენის წერტილი „აპის განახლებამდე".` }));
@@ -371,16 +380,102 @@ function renderSync() {
   card.appendChild(el('div', { class: 'btn-row', style: 'align-items:center' }, [connectBtn, syncBtn, backupBtn, disconnectBtn]));
   card.appendChild(el('p', { class: 'card__sub', text: '⚡ ცოცხალი რეჟიმი: შენი ცვლილება ~1 წამში იტვირთება, ხოლო სანამ აპი ეკრანზეა გახსნილი, მეორე ტელეფონის ცვლილებები ყოველ ~5 წამში მოდის (აპის დახურვისას ჩერდება და გახსნისთანავე ახლდება). ორივე მოწყობილობის ცვლილებები ერთიანდება ჩანაწერ-ჩანაწერ — ერთმანეთს არ გადაეწერება. დღეში ერთხელ ღრუბელში ცალკე სარეზერვო ფაილიც იქმნება (backup-წელი-თვე.json).' }));
 
-  card.appendChild(el('details', { class: 'help-details' }, [
-    el('summary', { text: '📲 ნინოს (ან სხვა მოწყობილობის) დაკავშირება' }),
-    el('ol', {}, [
-      el('li', {}, ['გიორგის GitHub-ში შექმენი ნინოსთვის ცალკე token: ', el('a', { href: 'https://github.com/settings/tokens/new?scopes=gist&description=family-budget-nino', target: '_blank', rel: 'noopener', text: 'ეს ბმული' }), ' უკვე მონიშნავს „gist"-ს — Expiration: „No expiration" → „Generate token".']),
-      el('li', { text: 'ნინოს ტელეფონზე გახსენი https://bagdadishvili.github.io/SalEx/ და დაამატე მთავარ ეკრანზე (Safari: გაზიარება → „Add to Home Screen"; Android Chrome: მენიუ → „Install app").' }),
-      el('li', { text: 'იქ: პარამეტრები → სინქრონიზაცია → ჩასვი ნინოს token → „დაკავშირება". აპი თავად იპოვის თქვენს მონაცემებს.' }),
-      el('li', { text: 'ცალკე token-ის უპირატესობა: თუ ტელეფონი დაიკარგა, GitHub-ში მხოლოდ იმ token-ს წაშლი — შენი მოწყობილობები ისევ იმუშავებს.' }),
-      el('li', { text: 'token-ს არავის გაუგზავნო ღია ჩატში; საუკეთესოა პირდაპირ ნინოს ტელეფონში ჩაწერა/ჩასმა.' })
-    ])
+  card.appendChild(renderInviteDevice());
+  return card;
+}
+
+// ---------------- Connect Nino's phone with a link ----------------
+
+function renderInviteDevice() {
+  const box = el('details', { class: 'help-details invite' }, [el('summary', { text: '📲 ნინოს ტელეფონის დაკავშირება (ბმულით)' })]);
+  box.appendChild(el('p', { class: 'card__sub', text: 'ნინოს GitHub-ის ანგარიში არ სჭირდება — მონაცემები შენს ანგარიშზეა. მას სჭირდება მხოლოდ საკუთარი „გასაღები" (token), რომელსაც შენ შექმნი შენს GitHub-ში.' }));
+  const step1 = el('a', { class: 'btn btn--secondary btn--sm', href: 'https://github.com/settings/tokens/new?scopes=gist&description=family-budget-nino', target: '_blank', rel: 'noopener', text: '1) ნინოსთვის token-ის შექმნა GitHub-ზე ↗' });
+  box.appendChild(el('ol', {}, [
+    el('li', {}, ['დააჭირე: ', step1, ' → Expiration: „No expiration" → ქვემოთ „Generate token" → დააკოპირე კოდი (ghp_…).'])
   ]));
+  const tokenIn = el('input', { type: 'password', placeholder: '2) ჩასვი ნინოს token (ghp_…)', autocomplete: 'off' });
+  const makeBtn = el('button', { type: 'button', class: 'btn btn--primary btn--sm', text: '3) ბმულის შექმნა' });
+  const out = el('div', {});
+  makeBtn.addEventListener('click', async () => {
+    const token = tokenIn.value.trim();
+    if (!/^gh[pousr]_|^github_pat_/.test(token)) { toast('ჩასვი სწორი token (იწყება ghp_ ან github_pat_)', 'error'); return; }
+    const gist = sync.getSyncConfig().gistId || '';
+    const url = `${location.origin}${location.pathname}#connect=${encodeURIComponent(token)}${gist ? `&gist=${encodeURIComponent(gist)}` : ''}`;
+    out.innerHTML = '';
+    const shareBtn = el('button', { type: 'button', class: 'btn btn--primary btn--sm', text: '📤 გაგზავნა ნინოსთვის' });
+    shareBtn.addEventListener('click', async () => {
+      try {
+        if (navigator.share) await navigator.share({ title: 'ოჯახის ბიუჯეტი', text: 'გახსენი ეს ბმული შენს ტელეფონზე — აპი თავად დაუკავშირდება:', url });
+        else { await navigator.clipboard.writeText(url); toast('ბმული დაკოპირდა ✓'); }
+      } catch { /* cancelled */ }
+    });
+    const copyBtn = el('button', { type: 'button', class: 'btn btn--secondary btn--sm', text: '📋 კოპირება' });
+    copyBtn.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(url); toast('ბმული დაკოპირდა ✓'); } catch { toast('ვერ დაკოპირდა — მონიშნე და დააკოპირე ხელით', 'error'); }
+    });
+    out.append(
+      el('p', { class: 'card__sub', text: '⚠️ ეს ბმული გასაღებივითაა — გაუგზავნე მხოლოდ ნინოს (მაგ. პირად ჩატში) და მერე წაშალე მესიჯი. ნინო გახსნის ბმულს თავის ტელეფონზე, დაადასტურებს და მზადაა.' }),
+      el('input', { type: 'text', value: url, readonly: 'true', class: 'invite__url' }),
+      el('div', { class: 'btn-row' }, [shareBtn, copyBtn])
+    );
+  });
+  box.appendChild(el('div', { class: 'field' }, [tokenIn]));
+  box.appendChild(el('div', { class: 'btn-row' }, [makeBtn]));
+  box.appendChild(out);
+  box.appendChild(el('p', { class: 'card__sub', text: 'ხელითაც შეიძლება: ნინოს ტელეფონზე გახსენი აპი → პარამეტრები → სინქრონიზაცია → ჩასვი token → „დაკავშირება". თუ ტელეფონი დაიკარგა — GitHub-ში (Settings → Developer settings → Tokens) მხოლოდ ნინოს token-ს წაშლი.' }));
+  return box;
+}
+
+// ---------------- Months: open / delete old months ----------------
+
+function renderMonths() {
+  const card = el('div', { class: 'card' });
+  card.appendChild(el('div', { class: 'card__title', text: '🗓 თვეები' }));
+  card.appendChild(el('p', { class: 'card__sub', text: 'გახსნა — თვეში გადასვლა და იქ ყველაფრის რედაქტირება. წაშლა შეიძლება მხოლოდ გასულ თვეებზე; წაშლამდე იქმნება აღდგენის წერტილი და რამდენიმე წამი გაქვს „↩ დაბრუნებისთვის".' }));
+  const list = el('div', { class: 'restore-list' });
+  card.appendChild(list);
+  const draw = () => {
+    list.innerHTML = '';
+    const months = getState().months;
+    const cur = monthKey();
+    Object.keys(months).sort().reverse().forEach(k => {
+      const m = months[k];
+      const paid = m.transactions.filter(tr => tr.paid).length;
+      const openBtn = el('button', { type: 'button', class: 'btn btn--secondary btn--sm', text: 'გახსნა' });
+      openBtn.addEventListener('click', () => { setSelectedMonth(k); navigate('dashboard'); });
+      const delBtn = el('button', { type: 'button', class: 'icon-btn icon-btn--sm', 'aria-label': `${k} წაშლა`, title: k < cur ? 'თვის წაშლა' : 'მიმდინარე/მომავალი თვე არ იშლება', text: '🗑' });
+      delBtn.disabled = k >= cur;
+      delBtn.addEventListener('click', async () => {
+        const ok = await confirmDialog(`წავშალო ${monthLabelFull(k)} მთლიანად (${m.transactions.length} ტრანზაქცია)? წაიშლება ორივე ტელეფონზე.`, { danger: true, confirmLabel: 'წაშლა' });
+        if (!ok) return;
+        await snapshotCurrent('manual');
+        const copy = JSON.parse(JSON.stringify(m));
+        updateState(d => { delete d.months[k]; return d; });
+        undoToast(`${monthLabelFull(k)} წაიშალა`, () => {
+          updateState(d => {
+            const back = JSON.parse(JSON.stringify(copy));
+            delete back._u; delete back._uf;
+            back.transactions.forEach(tr => { delete tr._u; });
+            d.months[k] = back;
+            if (d.deleted) delete d.deleted[`month:${k}`];
+            return d;
+          });
+          toast('დაბრუნდა ✓');
+          draw();
+        });
+        draw();
+      });
+      list.appendChild(el('div', { class: 'restore-row' }, [
+        el('div', { class: 'restore-row__main' }, [
+          el('div', { class: 'restore-row__title', text: monthLabelFull(k) + (k === cur ? ' · მიმდინარე' : '') }),
+          el('div', { class: 'restore-row__meta', text: `${m.transactions.length} ტრანზაქცია · გადახდილი ${paid}` })
+        ]),
+        openBtn,
+        delBtn
+      ]));
+    });
+  };
+  draw();
   return card;
 }
 
@@ -523,6 +618,15 @@ function renderDataSection() {
     : 'ბოლო ბექაფი: არასდროს';
   const backupInfo = el('div', { class: 'card__sub', text: lastBackupText });
   card.appendChild(backupInfo);
+  card.appendChild(el('details', { class: 'help-details' }, [
+    el('summary', { text: '📁 სად ინახება ბექაფები?' }),
+    el('ul', {}, [
+      el('li', { text: '„JSON ექსპორტი" — ფაილი family-budget-backup-წელი-თვე-დღე.json ინახება მოწყობილობის „Downloads / ჩამოტვირთვების" საქაღალდეში (კომპიუტერზე: Downloads; Android: Files → Downloads; iPhone: Files → Downloads ან „On My iPhone").' }),
+      el('li', { text: '„📤 გაზიარება" — იგივე ფაილი პირდაპირ Google Drive-ში, ფოსტაში ან სხვაგან (ტელეფონზე).' }),
+      el('li', { text: 'ავტომატური აღდგენის წერტილები — ბრაუზერში, ამ მოწყობილობაზე: პარამეტრები → 🛟 აღდგენის წერტილები.' }),
+      el('li', { text: 'ღრუბელი (თუ სინქრონიზაცია ჩართულია) — gist.github.com → შენი Gist „Family Budget app data": family-budget-data.json და ყოველთვიური backup-წელი-თვე.json, ყველა ძველი ვერსიით („Revisions").' })
+    ])
+  ]));
 
   const btnRow = el('div', { class: 'btn-row' });
 
@@ -571,7 +675,15 @@ function renderDataSection() {
     importCsvInput.value = '';
   });
 
-  btnRow.append(exportJsonBtn, importBtn, importInput, exportCsvBtn, importCsvBtn, importCsvInput);
+  const shareBtn = el('button', { class: 'btn btn--secondary', text: '📤 ბექაფის გაზიარება (Drive, ფოსტა…)' });
+  shareBtn.hidden = !canShareFiles();
+  shareBtn.addEventListener('click', async () => {
+    try {
+      const ok = await shareJsonBackup();
+      if (ok) { toast('ბექაფი გაზიარდა ✓'); backupInfo.textContent = `ბოლო ბექაფი: ${new Date().toLocaleString('ka-GE', { hour12: false })}`; }
+    } catch (e) { toast('ვერ მოხერხდა: ' + e.message, 'error'); }
+  });
+  btnRow.append(exportJsonBtn, shareBtn, importBtn, importInput, exportCsvBtn, importCsvBtn, importCsvInput);
   card.appendChild(btnRow);
 
   return card;

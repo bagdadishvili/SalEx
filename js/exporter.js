@@ -31,6 +31,27 @@ export function exportJson() {
   updateState(draft => { draft.settings.lastBackupAt = new Date().toISOString(); return draft; });
 }
 
+export function canShareFiles() {
+  try {
+    return typeof navigator !== 'undefined' && !!navigator.canShare && !!navigator.share &&
+      navigator.canShare({ files: [new File(['{}'], 'test.json', { type: 'application/json' })] });
+  } catch { return false; }
+}
+
+/** Shares the JSON backup through the phone's share sheet (Google Drive, mail…). Resolves true when shared. */
+export async function shareJsonBackup() {
+  const json = JSON.stringify(getState(), null, 2);
+  const file = new File([json], `family-budget-backup-${todayISO()}.json`, { type: 'application/json' });
+  try {
+    await navigator.share({ files: [file], title: 'ოჯახის ბიუჯეტის ბექაფი' });
+  } catch (e) {
+    if (e && e.name === 'AbortError') return false;
+    throw e;
+  }
+  updateState(draft => { draft.settings.lastBackupAt = new Date().toISOString(); return draft; });
+  return true;
+}
+
 /** Reads a File object (from <input type=file>), validates, and replaces state. Returns a Promise. */
 export function importJson(file) {
   return new Promise((resolve, reject) => {
