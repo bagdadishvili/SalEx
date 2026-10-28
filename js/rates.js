@@ -71,3 +71,59 @@ export async function fetchEurGelRate() {
     throw new Error('კურსის ჩამოტვირთვა ვერ მოხერხდა — შეამოწმე ინტერნეტი ან ჩაწერე ხელით');
   }
 }
+
+// ---------------- "Update now" (on demand) ----------------
+// The bank rate file is refreshed by a GitHub Action. With a small separate token (only
+// "Actions: read and write" on this one repository) the app can start that Action right now
+// and wait for the fresh file (~30–90 s). The token stays on this device only.
+
+const RATES_TOKEN_KEY = 'familyBudget.ratesToken';
+
+export function getRatesToken() {
+  try { return localStorage.getItem(RATES_TOKEN_KEY) || ''; } catch { return ''; }
+}
+export function setRatesToken(token) {
+  try { localStorage.setItem(RATES_TOKEN_KEY, String(token || '').trim()); } catch { /* ignore */ }
+}
+
+function repoParts() {
+  let owner = OWNER, repo = REPO;
+  if (typeof location !== 'undefined' && /\.github\.io$/.test(location.hostname)) {
+    owner = location.hostname.split('.')[0];
+    repo = location.pathname.split('/').filter(Boolean)[0] || REPO;
+  }
+  return { owner, repo };
+}
+
+/** Starts the rate Action now. Resolves true if GitHub accepted it. */
+export async function triggerRatesUpdate(token = getRatesToken()) {
+  if (!token) return false;
+  const { owner, repo } = repoParts();
+  const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/workflows/rates.yml/dispatches`, {
+    method: 'POST',
+    headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ref: 'main' })
+  });
+  if (res.status === 204) return true;
+  if (res.status === 401 || res.status === 403 || res.status === 404) throw new Error('კურსის token არ მუშაობს — შეამოწმე (Actions: Read and write, რეპოზიტორია SalEx)');
+  throw new Error(`GitHub-მა უარი თქვა (${res.status})`);
+}
+
+/** Starts the Action and waits until rates.json is newer than `since`. Resolves the fresh rate or null. */
+export async function fetchFreshRateNow({ timeoutMs = 120000, onWait } = {}) {
+  const since = Date.now() - 60000;
+  const ok = await triggerRatesUpdate();
+  if (!ok) return null;
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    await new Promise(r => setTimeout(r, 8000));
+    if (onWait) onWait(Math.round((Date.now() - started) / 1000));
+    try {
+      const r = await fetchBankRates();
+      if (r.fetchedAt && new Date(r.fetchedAt).getTime() > since) {
+        return { rate: r.buy, sell: r.sell, at: r.fetchedAt, kind: 'bog', source: 'საქართველოს ბანკი (ყიდვა)', stale: false };
+      }
+    } catch { /* keep waiting */ }
+  }
+  return null;
+}

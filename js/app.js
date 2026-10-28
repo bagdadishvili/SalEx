@@ -53,10 +53,14 @@ function applyTexts() {
   });
 }
 
+const scrollByRoute = {}; // e.g. come back to the dashboard exactly where you left it
+
 function render(route) {
   applyTexts();
   const scrollY = window.scrollY;
-  const sameRoute = viewRoot.dataset.route === route;
+  const prevRoute = viewRoot.dataset.route;
+  const sameRoute = prevRoute === route;
+  if (prevRoute && !sameRoute) scrollByRoute[prevRoute] = scrollY;
   viewRoot.innerHTML = '';
   viewRoot.dataset.route = route;
   tabBar.querySelectorAll('.tab-bar__item').forEach(btn => {
@@ -64,7 +68,10 @@ function render(route) {
     else btn.removeAttribute('aria-current');
   });
   routes[route](viewRoot);
-  if (sameRoute) window.scrollTo(0, scrollY);
+  const target = sameRoute ? scrollY : (scrollByRoute[route] || 0);
+  window.scrollTo(0, target);
+  // Content may grow a moment later (fonts, async rows) — try once more.
+  if (target > 0) requestAnimationFrame(() => { if (Math.abs(window.scrollY - target) > 2) window.scrollTo(0, target); });
 }
 
 /** Re-renders the current page (e.g. after data arrived from another device). */
@@ -334,7 +341,7 @@ function askNewText(key, current, def) {
 }
 
 /** Shown in Settings; bump together with CACHE_VERSION in sw.js. */
-export const APP_VERSION = '14';
+export const APP_VERSION = '15';
 
 export { applyAppearance, checkBackupReminder };
 

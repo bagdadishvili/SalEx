@@ -94,7 +94,7 @@ export async function listSnapshots() {
     const records = await allRecords(db);
     return records
       .sort((a, b) => b.id - a.id)
-      .map(({ id, createdAt, reason, summary }) => ({ id, createdAt, reason, summary }));
+      .map(({ id, createdAt, reason, summary, sharedAt }) => ({ id, createdAt, reason, summary, sharedAt: sharedAt || null }));
   } catch (e) {
     console.warn('[backup] list failed', e);
     return [];
@@ -107,6 +107,24 @@ export async function getSnapshotData(id) {
   const rec = await reqToPromise(tx.objectStore(STORE).get(id));
   if (!rec) throw new Error('ასლი ვერ მოიძებნა');
   return JSON.parse(rec.data);
+}
+
+/** Remembers that this restore point was sent out (Google Drive, mail…) via the share sheet. */
+export async function markSnapshotShared(id) {
+  const db = await openDb();
+  const tx = db.transaction(STORE, 'readwrite');
+  const store = tx.objectStore(STORE);
+  const rec = await reqToPromise(store.get(id));
+  if (rec) { rec.sharedAt = new Date().toISOString(); store.put(rec); }
+  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); });
+}
+
+/** Deletes one restore point from THIS device only (a copy sent to Drive stays there). */
+export async function deleteSnapshot(id) {
+  const db = await openDb();
+  const tx = db.transaction(STORE, 'readwrite');
+  tx.objectStore(STORE).delete(id);
+  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); });
 }
 
 /** Saves a snapshot only if none was made in the last `hours` hours. */

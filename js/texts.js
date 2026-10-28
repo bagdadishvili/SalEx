@@ -23,6 +23,7 @@ export const TEXT_GROUPS = [
     'card.summary': 'თვის მიმოხილვა',
     'card.due': '⏳ ამ თვეში ჯერ გადასახდელი',
     'card.envelopes': '🛒 ყოველდღიური ბიუჯეტები',
+    'card.extras': '🧺 დამატებითი ხარჯები',
     'card.income': 'შემოსავალი',
     'card.rate': 'კურსი (1 € = ? ₾)',
     'card.georgia': 'საქართველოში გადასარიცხი',

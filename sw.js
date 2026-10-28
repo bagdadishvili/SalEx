@@ -4,7 +4,7 @@
 // IndexedDB), so updating or clearing this cache never touches it.
 // Still bump CACHE_VERSION on releases — it forces a clean re-download of the app shell.
 
-const CACHE_VERSION = 'family-budget-v14';
+const CACHE_VERSION = 'family-budget-v15';
 const NETWORK_TIMEOUT_MS = 4000;
 
 // Paths are resolved relative to this file's location, so the app works at

@@ -265,6 +265,7 @@ function txnRow(txn, month, categories, refresh) {
  * marks unpaid again, with an undo. Envelopes get "＋ ხარჯი". Used here and on dashboard cards.
  */
 export function payButton(txn, month, refresh) {
+  if (txn.kind === 'extra') return el('span', { class: 'chip', title: 'დამატებითი ხარჯი (უკვე გადახდილი)', text: '🧺 დამატებითი' });
   const envelope = isEnvelope(txn);
   if (envelope) {
     const b = el('button', { type: 'button', class: 'pay-btn pay-btn--envelope', 'aria-label': 'ხარჯის ან ნაშთის ჩაწერა', text: '＋ ხარჯი' });

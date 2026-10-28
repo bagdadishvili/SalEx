@@ -5,7 +5,7 @@ import { saveSnapshot, summarizeState } from './backup.js';
 import { stampChanges, restampAll, fillMissingStamps, EPOCH } from './records.js';
 
 const STORAGE_KEY = 'familyBudget.v1';
-const CURRENT_VERSION = 6;
+const CURRENT_VERSION = 7;
 const SAVE_DEBOUNCE_MS = 300;
 const FREE_BUCKET_ID = 'free';
 // A freshly seeded (never edited) state carries this timestamp, so it can never look
@@ -213,6 +213,18 @@ function migrateV4ToV5(raw) {
   return raw;
 }
 
+/** v7: targets can be a % of income OR a fixed € amount (category + free money). Additive only. */
+function migrateV6ToV7(raw) {
+  (raw.categories || []).forEach(c => {
+    if (c.targetType !== 'amount' && c.targetType !== 'percent') c.targetType = 'percent';
+    if (c.amount === undefined) c.amount = null;
+  });
+  const pf = raw.settings && raw.settings.planFree;
+  if (pf) ['giorgi', 'nino'].forEach(p => { if (pf[p] && pf[p].targetType !== 'amount') pf[p].targetType = 'percent'; });
+  raw.version = 7;
+  return raw;
+}
+
 /** v6: category owner (shared / giorgi / nino) and user-editable texts. Additive only. */
 function migrateV5ToV6(raw) {
   (raw.categories || []).forEach(c => { if (!['shared', 'giorgi', 'nino'].includes(c.owner)) c.owner = 'shared'; });
@@ -251,6 +263,9 @@ function migrate(raw) {
   if (raw.version < 6) {
     raw = migrateV5ToV6(raw);
   }
+  if (raw.version < 7) {
+    raw = migrateV6ToV7(raw);
+  }
 
   // Ensure required top-level shape even if partially corrupted.
   const seed = seedState();
@@ -275,6 +290,7 @@ function migrate(raw) {
     if (!c.goalType) c.goalType = 'max';
     if (c.parentId === undefined) c.parentId = null;
     if (!['shared', 'giorgi', 'nino'].includes(c.owner)) c.owner = 'shared';
+    if (c.targetType !== 'amount') c.targetType = 'percent';
     c.georgiaTransfer = !!c.georgiaTransfer;
   });
   raw.templates = Array.isArray(raw.templates) ? raw.templates : [];

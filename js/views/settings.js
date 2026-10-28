@@ -3,7 +3,7 @@
 import { getState, updateState, wipeState, replaceState, snapshotCurrent, deviceName, setDeviceName } from '../state.js';
 import { sumAllPercents, effectiveCardOrder } from '../calc.js';
 import { el, confirmDialog, toast, openModal } from '../ui.js';
-import { listSnapshots, getSnapshotData, saveSnapshot, summarizeState, SNAPSHOT_REASONS } from '../backup.js';
+import { listSnapshots, getSnapshotData, saveSnapshot, summarizeState, SNAPSHOT_REASONS, markSnapshotShared, deleteSnapshot } from '../backup.js';
 import { exportJson, importJson, exportCsv, importCsv } from '../exporter.js';
 import { applyAppearance, checkBackupReminder, APP_VERSION, navigate } from '../app.js';
 import { monthKey } from '../state.js';
@@ -12,12 +12,13 @@ import { undoToast } from '../ui.js';
 import { shareJsonBackup, canShareFiles } from '../exporter.js';
 import { pickColor, COLOR_PRESETS } from '../components.js';
 import * as sync from '../sync.js';
+import { getRatesToken, setRatesToken } from '../rates.js';
 import { t } from '../texts.js';
 
 const CARD_LABELS = {
   summary: 'თვის მიმოხილვა', income: 'შემოსავალი', rate: 'კურსი', georgia: 'საქართველოში გადასარიცხი',
   free: 'თავისუფალი თანხა', planVsActual: 'დაგეგმილი vs რეალური', year: 'წლიური მიმოხილვა',
-  due: 'ჯერ გადასახდელი', envelopes: 'ყოველდღიური ბიუჯეტები (კვება, საწვავი)', split: 'ხელფასის განაწილება'
+  due: 'ჯერ გადასახდელი', envelopes: 'ყოველდღიური ბიუჯეტები (კვება, საწვავი)', split: 'ხელფასის განაწილება', extras: 'დამატებითი ხარჯები'
 };
 
 function summaryText(sum) {
@@ -42,7 +43,13 @@ export function renderSettings(root) {
   const adminBtn = el('button', { class: 'btn btn--primary', type: 'button', text: '🛠 ადმინი — ტექსტების და სახელების შეცვლა' });
   adminBtn.addEventListener('click', () => navigate('admin'));
   container.appendChild(el('div', { class: 'btn-row' }, [adminBtn]));
-  container.appendChild(renderBuckets());
+  const planLink = el('button', { class: 'btn btn--secondary', type: 'button', text: '📊 პროცენტები / თანხები — „კატეგორიები" გვერდზე' });
+  planLink.addEventListener('click', () => navigate('categories'));
+  container.appendChild(el('div', { class: 'card' }, [
+    el('div', { class: 'card__title', text: 'გეგმა' }),
+    el('p', { class: 'card__sub', text: 'ყველა კატეგორიის და თავისუფალი თანხის მიზანი (პროცენტით ან €-ით) ახლა ერთ ადგილასაა — „კატეგორიები" გვერდის თავში.' }),
+    el('div', { class: 'btn-row' }, [planLink])
+  ]));
   container.appendChild(renderSplitSettings());
   container.appendChild(renderAppearance());
   container.appendChild(renderSync());
@@ -163,6 +170,21 @@ function renderSplitSettings() {
     updateState(d => { d.settings.rateAuto = autoBox.checked; return d; });
     toast('შენახულია ✓');
   });
+  // On-demand bank rate: a tiny token that may only start the rate Action of this repo.
+  const rtIn = el('input', { type: 'password', placeholder: 'github_pat_… (არასავალდებულო)', value: getRatesToken(), autocomplete: 'off' });
+  rtIn.addEventListener('change', () => { setRatesToken(rtIn.value); toast(rtIn.value.trim() ? 'შენახულია ✓ — 🏦 ახლა ბანკიდან პირდაპირ ითხოვს' : 'წაიშალა'); });
+  card.appendChild(el('details', { class: 'help-details' }, [
+    el('summary', { text: '🏦 კურსის „ახლავე" განახლება (არასავალდებულო)' }),
+    el('p', { class: 'card__sub', text: 'ბანკის კურსი ავტომატურად ყოველ ~10 წუთში ახლდება (GitHub ზოგჯერ აგვიანებს). რომ 🏦 ღილაკზე დაჭერისას მაშინვე ბანკიდან მოვიდეს, საჭიროა ცალკე პატარა token:' }),
+    el('ol', {}, [
+      el('li', {}, ['გახსენი ', el('a', { href: 'https://github.com/settings/personal-access-tokens/new', target: '_blank', rel: 'noopener', text: 'GitHub → Fine-grained token' }), '; Token name: „family-budget-rates"; Expiration: 1 წელი.']),
+      el('li', { text: 'Repository access → „Only select repositories" → SalEx.' }),
+      el('li', { text: 'Permissions → Repository permissions → Actions → „Read and write". სხვა არაფერი.' }),
+      el('li', { text: '„Generate token" → დააკოპირე და ჩასვი ქვემოთ. ეს token მხოლოდ ამ მოწყობილობაზე ინახება.' })
+    ]),
+    el('div', { class: 'field' }, [rtIn])
+  ]));
+
   card.appendChild(el('label', { class: 'field checkbox-field' }, [
     autoBox,
     el('span', { text: 'მიმდინარე თვის კურსი ავტომატურად განახლდეს საქართველოს ბანკის ყიდვის კურსით (ევრო → ლარი). ხელით ჩაწერილ კურსს აპი არ შეცვლის; წარსულ თვეებს — არასდროს.' })
@@ -515,7 +537,7 @@ function renderRestore() {
       localList.appendChild(el('div', { class: 'card__sub', text: 'ჯერ ასლი არ არის.' }));
       return;
     }
-    items.slice(0, 15).forEach(item => {
+    items.slice(0, 30).forEach(item => {
       const btn = el('button', { class: 'btn btn--secondary btn--sm', text: 'აღდგენა' });
       btn.addEventListener('click', async () => {
         const ok = await confirmDialog(`აღვადგინო ასლი ${fmtDateTime(item.createdAt)}-დან? (${summaryText(item.summary)})\nმიმდინარე მდგომარეობა ჯერ ცალკე ასლად შეინახება.`, { confirmLabel: 'აღდგენა' });
@@ -528,7 +550,37 @@ function renderRestore() {
           toast('შეცდომა: ' + e.message, 'error');
         }
       });
-      localList.appendChild(restoreRow(fmtDateTime(item.createdAt), `${SNAPSHOT_REASONS[item.reason] || item.reason} · ${summaryText(item.summary)}`, btn));
+      // Send this copy out (Google Drive, mail…). The browser can't see where it went, so the
+      // status says "sent" once the share sheet finished successfully.
+      const shareBtn = el('button', { class: 'icon-btn icon-btn--sm', 'aria-label': 'გაგზავნა Drive-ში / ფოსტაში', title: 'გაგზავნა (Drive, ფოსტა…)', text: '📤' });
+      shareBtn.hidden = !canShareFiles();
+      shareBtn.addEventListener('click', async () => {
+        try {
+          const data = await getSnapshotData(item.id);
+          const file = new File([JSON.stringify(data, null, 2)], `family-budget-${item.createdAt.slice(0, 16).replace(/[:T]/g, '-')}.json`, { type: 'application/json' });
+          await navigator.share({ files: [file], title: 'ოჯახის ბიუჯეტის ასლი' });
+          await markSnapshotShared(item.id);
+          toast('გაიგზავნა ✓');
+          drawLocal();
+        } catch (e) {
+          if (!e || e.name !== 'AbortError') toast('ვერ გაიგზავნა: ' + (e && e.message), 'error');
+        }
+      });
+      const delBtn = el('button', { class: 'icon-btn icon-btn--sm', 'aria-label': 'მოწყობილობიდან წაშლა', title: 'ამ მოწყობილობიდან წაშლა', text: '🗑' });
+      delBtn.addEventListener('click', async () => {
+        const ok = await confirmDialog(item.sharedAt
+          ? 'წავშალო ეს ასლი ამ მოწყობილობიდან? გაგზავნილი ასლი (Drive/ფოსტა) იქ დარჩება.'
+          : '⚠️ ეს ასლი ჯერ არსად გაგზავნილა — წაშლის შემდეგ აღარ იარსებებს. მაინც წავშალო?', { danger: true, confirmLabel: 'წაშლა' });
+        if (!ok) return;
+        await deleteSnapshot(item.id);
+        toast('წაიშალა ამ მოწყობილობიდან');
+        drawLocal();
+      });
+      const status = item.sharedAt
+        ? el('span', { class: 'chip chip--ok', text: `☁️ გაგზავნილია ${fmtDateTime(item.sharedAt)}` })
+        : el('span', { class: 'chip', text: '📱 მხოლოდ ამ მოწყობილობაზე' });
+      const meta = el('div', {}, [el('div', { text: `${SNAPSHOT_REASONS[item.reason] || item.reason} · ${summaryText(item.summary)}` }), status]);
+      localList.appendChild(restoreRow(fmtDateTime(item.createdAt), meta, el('div', { class: 'restore-row__actions' }, [btn, shareBtn, delBtn])));
     });
   }
   drawLocal();

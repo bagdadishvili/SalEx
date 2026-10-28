@@ -9,6 +9,36 @@ export function gelToEur(amountGel, rate) {
   return amountGel / rate;
 }
 
+// ---- Plan targets: every category (and each person's free money) has a target that is
+// either a % of the month's income or a fixed € amount (v15). The other value is derived. ----
+
+/** Target in € for a category / free-money config, given the month's total income T. */
+export function targetEur(cfg, T) {
+  if (!cfg) return 0;
+  if (cfg.targetType === 'amount') return Number(cfg.amount) || 0;
+  return (T || 0) * (Number(cfg.percent) || 0) / 100;
+}
+
+/** Target in % of income for a category / free-money config. */
+export function targetPct(cfg, T) {
+  if (!cfg) return 0;
+  if (cfg.targetType === 'amount') return T > 0 ? ((Number(cfg.amount) || 0) / T) * 100 : 0;
+  return Number(cfg.percent) || 0;
+}
+
+/** All categories that roll up into `top` (the top itself + its sub-categories, any depth). */
+export function familyOf(categories, top) {
+  return categories.filter(c => c.id === top.id || (resolveTopCategory(categories, c.id) || {}).id === top.id && c.parentId !== FREE_BUCKET_ID);
+}
+
+// ---- "Extra" purchases (shoes, medicine… bought outside the plan) ----
+// kind 'extra'; if paid from an envelope's money (fromEnvelope = that envelope txn id) it is
+// NOT counted again in totals — it only explains where the envelope's money went.
+
+export function isExtra(txn) {
+  return !!txn && txn.kind === 'extra';
+}
+
 // ---- Envelopes ("ბიუჯეტი": food, fuel…) — a planned amount that is spent gradually ----
 
 export function isEnvelope(txn) {
@@ -28,12 +58,14 @@ function toEur(amount, txn, monthRate) {
 
 /** Money already gone (EUR): paid transactions, or what has been spent from an envelope so far. */
 export function txnPaidEur(txn, monthRate) {
+  if (isExtra(txn) && txn.fromEnvelope) return 0;
   if (isEnvelope(txn)) return toEur(envelopeSpent(txn), txn, monthRate);
   return txn.paid ? txnAmountEur(txn, monthRate) : 0;
 }
 
 /** Money still to go out this month (EUR): unpaid bills + what is left in open envelopes. */
 export function txnRemainingEur(txn, monthRate) {
+  if (isExtra(txn)) return 0;
   if (isEnvelope(txn)) {
     if (txn.paid) return 0; // envelope closed for the month
     return Math.max(0, toEur((txn.amountPlanned || 0) - envelopeSpent(txn), txn, monthRate));
@@ -54,6 +86,7 @@ export function txnAmountEur(txn, monthRate) {
 
 /** Planned amount of a transaction in EUR (always uses amountPlanned, current month rate for GEL). */
 export function txnPlannedEur(txn, monthRate) {
+  if (isExtra(txn) && txn.fromEnvelope) return 0;
   if (txn.currency === 'GEL') return gelToEur(txn.amountPlanned, monthRate);
   return txn.amountPlanned;
 }
@@ -100,7 +133,7 @@ function sumFreeByOwner(month, categories, owner, usePaidActual) {
  * The dashboard card order actually rendered: stored order, cleaned of stale ids,
  * with any new top-level categories inserted before the free-money card.
  */
-export const FIXED_CARDS = ['summary', 'due', 'envelopes', 'income', 'rate', 'georgia', 'free', 'split', 'planVsActual', 'year'];
+export const FIXED_CARDS = ['summary', 'due', 'envelopes', 'extras', 'income', 'rate', 'georgia', 'free', 'split', 'planVsActual', 'year'];
 
 export function effectiveCardOrder(settings, categories) {
   const fixed = FIXED_CARDS;
@@ -151,11 +184,16 @@ export function computeDashboard(month, categories, settings) {
   const T = totalIncome(month);
   const pct = (x) => T > 0 ? Math.round((x / T) * 1000) / 10 : 0;
 
-  // One "bucket" per top-level category; child categories' amounts roll up into it.
+  // One "bucket" per top-level category; sub-categories' amounts AND targets roll up into it.
   const buckets = categories.filter(c => !c.parentId).map(b => {
-    const planned = sumByTop(month, categories, b.id, false);
+    const bills = sumByTop(month, categories, b.id, false);
     const actual = sumByTop(month, categories, b.id, true);
-    return { ...b, planned, actual, pct: pct(planned) };
+    const fam = familyOf(categories, b);
+    const target = fam.reduce((acc, c) => acc + targetEur(c, T), 0);
+    const targetPercent = T > 0 ? (target / T) * 100 : fam.reduce((acc, c) => acc + targetPct(c, T), 0);
+    // Savings-type blocks: the target IS the plan (money to move), even before any transaction exists.
+    const planned = b.goalType === 'min' ? Math.max(target, bills) : bills;
+    return { ...b, planned, bills, actual, target, targetPercent, toTransfer: b.goalType === 'min' ? Math.max(0, planned - actual) : 0, pct: pct(planned) };
   });
   const bucketsPlannedTotal = buckets.reduce((s, b) => s + b.planned, 0);
   const bucketsActualTotal = buckets.reduce((s, b) => s + b.actual, 0);
@@ -164,9 +202,10 @@ export function computeDashboard(month, categories, settings) {
 
   const freeTotal = T - bucketsPlannedTotal;
   const { giorgi: freeGiorgiCfg, nino: freeNinoCfg } = settings.planFree;
-  const freeShareDenom = (freeGiorgiCfg.percent + freeNinoCfg.percent) || 1;
-  const freeGiorgiShare = freeTotal * (freeGiorgiCfg.percent / freeShareDenom);
-  const freeNinoShare = freeTotal * (freeNinoCfg.percent / freeShareDenom);
+  const tg = targetEur(freeGiorgiCfg, T), tn = targetEur(freeNinoCfg, T);
+  const freeShareDenom = (tg + tn) || 0;
+  const freeGiorgiShare = freeShareDenom > 0 ? freeTotal * (tg / freeShareDenom) : freeTotal / 2;
+  const freeNinoShare = freeShareDenom > 0 ? freeTotal * (tn / freeShareDenom) : freeTotal / 2;
 
   const freeSpentGiorgi = sumFreeByOwner(month, categories, 'giorgi', true);
   const freeSpentNino = sumFreeByOwner(month, categories, 'nino', true);
@@ -207,8 +246,27 @@ export const ACCOUNT_LABELS = { shared: 'საერთო', giorgi: 'გიო
  * What still has to go out this month, total and per paying account.
  * bills = unpaid regular transactions; envelopes = what is left in open envelopes.
  */
-export function computeRemaining(month) {
-  const out = { total: 0, bills: 0, envelopes: 0, count: 0, byAccount: { shared: 0, giorgi: 0, nino: 0 }, next: [] };
+export function computeRemaining(month, categories = null, settings = null) {
+  const out = { total: 0, bills: 0, envelopes: 0, savings: 0, count: 0, byAccount: { shared: 0, giorgi: 0, nino: 0 }, next: [] };
+  // Savings targets not transferred yet (per (sub)category, by whose they are).
+  if (categories) {
+    const T = totalIncome(month);
+    categories.forEach(c => {
+      const top = resolveTopCategory(categories, c.id);
+      if (!top || top.parentId === FREE_BUCKET_ID || top.goalType !== 'min') return;
+      const target = targetEur(c, T);
+      if (target <= 0) return;
+      const done = month.transactions.filter(t => t.categoryId === c.id).reduce((acc, t) => acc + Math.max(txnPaidEur(t, month.exchangeRate), 0), 0);
+      const plannedOpen = month.transactions.filter(t => t.categoryId === c.id).reduce((acc, t) => acc + txnRemainingEur(t, month.exchangeRate), 0);
+      const missing = Math.max(0, target - done - plannedOpen); // open transactions are counted below already
+      if (missing <= 0.004) return;
+      out.total += missing;
+      out.savings += missing;
+      const acc = ACCOUNTS.includes(c.owner) ? c.owner : 'shared';
+      out.byAccount[acc] += missing;
+    });
+  }
+  void settings;
   month.transactions.forEach(t => {
     const rem = txnRemainingEur(t, month.exchangeRate);
     if (rem <= 0.004) return;
@@ -267,20 +325,34 @@ export function computeSalarySplit(month, categories, settings, overrides = {}) 
     if (owner === 'giorgi' || owner === 'nino') target[owner] += amount;
     else { target.giorgi += amount * share.giorgi; target.nino += amount * share.nino; }
   };
-  tops.forEach(c => {
-    const budget = T * (Number(c.percent) || 0) / 100;
-    const p = plannedBy[c.id];
-    if (c.goalType === 'min') {
-      const amount = Math.max(budget, p.total);
+  // Every category counts with its OWN owner and target (v15) — e.g. "დანაზოგი (ნინო)" shown
+  // inside Giorgi's savings block on the dashboard is still Nino's money here.
+  const plannedByCat = {};
+  month.transactions.forEach(t => {
+    const eur = txnPlannedEur(t, month.exchangeRate);
+    plannedByCat[t.categoryId] = (plannedByCat[t.categoryId] || 0) + eur;
+  });
+  categories.forEach(c => {
+    const top = resolveTopCategory(categories, c.id);
+    if (!top || top.parentId === FREE_BUCKET_ID || c.parentId === FREE_BUCKET_ID) return;
+    const target = targetEur(c, T);
+    const planned = plannedByCat[c.id] || 0;
+    const owner = c.owner && c.owner !== 'shared' ? c.owner : (top.owner || 'shared');
+    if (top.goalType === 'min') {
+      const amount = Math.max(target, planned);
       savings += amount;
-      addFor(saveBy, c.owner, amount);
+      addFor(saveBy, owner, amount);
     } else {
-      spendBudget += budget;
-      const amount = basis === 'plan' ? Math.max(budget, p.total) : p.total;
+      spendBudget += target;
+      const amount = basis === 'plan' ? Math.max(target, planned) : planned;
       spend += amount;
-      addFor(essBy, c.owner, amount);
-      ACCOUNTS.forEach(a => { debits[a] += p[a]; });
+      addFor(essBy, owner, amount);
     }
+  });
+  tops.forEach(c => {
+    if (c.goalType === 'min') return;
+    const p = plannedBy[c.id];
+    ACCOUNTS.forEach(a => { debits[a] += p[a]; });
   });
   const spendPlannedTotal = debits.shared + debits.giorgi + debits.nino;
 
@@ -354,23 +426,32 @@ export function computePlanVsActual(month, categories, settings) {
 
   const rows = dash.buckets.map(b => {
     const actual = pct(b.actual);
-    const ok = b.goalType === 'min' ? actual >= b.percent : actual <= b.percent;
-    return { key: b.id, label: b.name, color: b.color, target: b.percent, actual, delta: Math.round((actual - b.percent) * 10) / 10, ok };
+    const target = b.targetPercent;
+    const ok = b.goalType === 'min' ? actual >= target - 0.05 : actual <= target + 0.05;
+    return { key: b.id, label: b.name, color: b.color, target, actual, delta: Math.round((actual - target) * 10) / 10, ok };
   });
 
   const { giorgi: freeGiorgiCfg, nino: freeNinoCfg } = settings.planFree;
   const giorgiActual = pct(dash.free.giorgi.spent);
   const ninoActual = pct(dash.free.nino.spent);
-  rows.push({ key: 'freeGiorgi', label: 'თავისუფალი (გიორგი)', color: freeGiorgiCfg.color, target: freeGiorgiCfg.percent, actual: giorgiActual, delta: Math.round((giorgiActual - freeGiorgiCfg.percent) * 10) / 10, ok: giorgiActual <= freeGiorgiCfg.percent });
-  rows.push({ key: 'freeNino', label: 'თავისუფალი (ნინო)', color: freeNinoCfg.color, target: freeNinoCfg.percent, actual: ninoActual, delta: Math.round((ninoActual - freeNinoCfg.percent) * 10) / 10, ok: ninoActual <= freeNinoCfg.percent });
+  const tgP = targetPct(freeGiorgiCfg, T), tnP = targetPct(freeNinoCfg, T);
+  rows.push({ key: 'freeGiorgi', label: 'თავისუფალი (გიორგი)', color: freeGiorgiCfg.color, target: tgP, actual: giorgiActual, delta: Math.round((giorgiActual - tgP) * 10) / 10, ok: giorgiActual <= tgP + 0.05 });
+  rows.push({ key: 'freeNino', label: 'თავისუფალი (ნინო)', color: freeNinoCfg.color, target: tnP, actual: ninoActual, delta: Math.round((ninoActual - tnP) * 10) / 10, ok: ninoActual <= tnP + 0.05 });
 
   return rows;
 }
 
 /** Sum of top-level category percents + free-money percents; must equal 100 for a valid plan. */
-export function sumAllPercents(settings, categories) {
-  const catSum = categories.filter(c => !c.parentId).reduce((s, c) => s + (Number(c.percent) || 0), 0);
-  return catSum + (Number(settings.planFree.giorgi.percent) || 0) + (Number(settings.planFree.nino.percent) || 0);
+/**
+ * Sum of all targets in % of income T (every category incl. sub-categories — € targets are
+ * converted with T — plus both people's free money). Must equal 100 for a valid plan.
+ */
+export function sumAllPercents(settings, categories, T = 0) {
+  const catSum = categories
+    .filter(c => c.parentId !== FREE_BUCKET_ID)
+    .reduce((acc, c) => acc + targetPct(c, T), 0);
+  const v = catSum + targetPct(settings.planFree.giorgi, T) + targetPct(settings.planFree.nino, T);
+  return Math.round(v * 10) / 10;
 }
 
 // ---- Number formatting (German-style: space thousands, comma decimals) ----
@@ -508,6 +589,26 @@ export function runSelfChecks() {
   const inv = computeSalarySplit(sm, invest, { ...settings, contributionBasis: 'actual' });
   assertClose('owner=nino: nino saves all 1000', inv.persons.nino.savings, 1000);
   assertClose('owner=nino: giorgi saves 0', inv.persons.giorgi.savings, 0);
+  // € target + sub-category with its own owner: savings block (giorgi) 300 € + child (nino) 200 €.
+  const cats2 = [
+    { id: 'e', name: 'e', percent: 0, goalType: 'max', parentId: null, owner: 'shared' },
+    { id: 'sg', name: 'sg', targetType: 'amount', amount: 300, percent: 0, goalType: 'min', parentId: null, owner: 'giorgi' },
+    { id: 'sn', name: 'sn', targetType: 'amount', amount: 200, percent: 0, goalType: 'min', parentId: 'sg', owner: 'nino' }
+  ];
+  const m2 = { exchangeRate: 3, income: { giorgi: 2000, nino: 2000 }, transactions: [] };
+  const d2 = computeDashboard(m2, cats2, settings);
+  assertClose('savings block planned = targets even without txns (500)', d2.buckets.find(b => b.id === 'sg').planned, 500);
+  assertClose('savings block target % = 12.5', d2.buckets.find(b => b.id === 'sg').targetPercent, 12.5);
+  const s2 = computeSalarySplit(m2, cats2, settings);
+  assertClose('child owner counts: giorgi saves 300', s2.persons.giorgi.savings, 300);
+  assertClose('child owner counts: nino saves 200', s2.persons.nino.savings, 200);
+  assertClose('remaining includes savings to transfer (500)', computeRemaining(m2, cats2, settings).savings, 500);
+  assertClose('sumAllPercents with € targets', sumAllPercents({ planFree: { giorgi: { percent: 5 }, nino: { targetType: 'amount', amount: 400 } } }, cats2, 4000), 27.5);
+  // Extra bought from the food envelope is not counted twice.
+  const env2 = { id: 'food', categoryId: 'cat_essentials', currency: 'EUR', amountPlanned: 1000, kind: 'envelope', spends: [{ amount: 600 }], paid: false };
+  const ex = { id: 'x', kind: 'extra', fromEnvelope: 'food', categoryId: 'cat_essentials', currency: 'EUR', amountPlanned: 50, amountActual: 50, paid: true };
+  const tot2 = computeMonthTotals({ exchangeRate: 3, income: { giorgi: 0, nino: 0 }, transactions: [env2, ex] });
+  assertClose('extra from envelope not double counted', tot2.paid, 600);
   assertClose('50/50 full: giorgi to shared 800', half.persons.giorgi.toShared, 800);
   assertClose('50/50 full: nino to shared 800', half.persons.nino.toShared, 800);
   assertClose('50/50 full: 400 back to giorgi', half.persons.giorgi.backFromShared, 400);
