@@ -5,9 +5,9 @@ import { generateMonthTransactions, monthNeedsGeneration, monthIsPrepared, initM
 import { openPrepareWizard, preparationPreview } from '../prepare.js';
 import { monthLabel, monthLabelFull } from '../monthNav.js';
 import {
-  computeDashboard, computePlanVsActual, computeMonthTotals, computeRangeOverview, computeRemaining, computeSalarySplit,
-  effectiveCardOrder, totalIncome, formatMoney, formatPercent, parseAmountInput, isEnvelope, envelopeSpent,
-  isGeorgia, topIdOf, txnRemainingEur, txnPlannedEur, txnAmountEur, txnPaidEur, FREE_BUCKET_ID, targetEur, familyOf, isExtra
+  computeDashboard, computeMonthOverview, computeRangeOverview, computeRemaining, computeSalarySplit,
+  effectiveCardOrder, formatMoney, formatPercent, parseAmountInput, isEnvelope, envelopeSpent, envelopeExtras, envelopeUsed,
+  isGeorgia, isSavingsTxn, topIdOf, txnRemainingEur, txnPlannedEur, txnAmountEur, txnPaidEur, FREE_BUCKET_ID, targetEur, familyOf, isExtra
 } from '../calc.js';
 import { openModal, undoToast } from '../ui.js';
 import { todayISO } from '../state.js';
@@ -29,6 +29,7 @@ function shiftKey(key, delta) {
   return `${Math.floor(idx / 12)}-${String((idx % 12) + 1).padStart(2, '0')}`;
 }
 let lastAutoRateTry = 0;
+let rateWait = 0; // when the on-demand rate request started (0 = none running)
 
 /** Rate value to write for a month (GEL per 1 €), with where it came from. */
 function rateSourceFrom(r) {
@@ -99,7 +100,6 @@ export function renderDashboard(root) {
     const month = state.months[key];
     const { categories, settings } = state;
     const dash = computeDashboard(month, categories, settings);
-    const pva = computePlanVsActual(month, categories, settings);
 
     cardsWrap.innerHTML = '';
     if (settings.newMonthMode !== 'auto') {
@@ -107,7 +107,7 @@ export function renderDashboard(root) {
     }
     const hidden = new Set(settings.hiddenCards || []);
     const order = effectiveCardOrder(settings, categories).filter(k => !hidden.has(k));
-    const ctx = { month, key, dash, pva, categories, settings, state, rerender: draw, goToMonth };
+    const ctx = { month, key, dash, categories, settings, state, rerender: draw, goToMonth };
 
     order.forEach(cardKey => {
       const renderer = CARD_RENDERERS[cardKey];
@@ -214,7 +214,7 @@ function attachDetails(card, id, ctx, filterFn, preset = null) {
   txns.forEach(tr => {
     const cur = tr.currency;
     const shown = tr.paid ? (tr.amountActual ?? tr.amountPlanned) : tr.amountPlanned;
-    const envelopeInfo = isEnvelope(tr) ? ` · დახარჯულია ${formatMoney(envelopeSpent(tr), cur, 0)}` : '';
+    const envelopeInfo = isEnvelope(tr) ? ` · დახარჯულია ${formatMoney(envelopeUsed(tr, month.transactions, month.exchangeRate), cur, 0)}` : '';
     const editBtn = el('button', { type: 'button', class: 'icon-btn icon-btn--sm', 'aria-label': `${tr.name} — რედაქტირება`, text: '✎' });
     editBtn.addEventListener('click', (e) => { e.stopPropagation(); openTransactionForm(tr, key, rerender); });
     box.appendChild(el('div', { class: 'detail-row' + (tr.paid ? ' detail-row--paid' : '') }, [
@@ -247,27 +247,47 @@ function attachDetails(card, id, ctx, filterFn, preset = null) {
 
 // ---------------- Card renderers ----------------
 
-function summaryCard({ month }) {
-  const totals = computeMonthTotals(month);
-  const pct = totals.planned > 0 ? Math.min(100, (totals.paid / totals.planned) * 100) : 0;
+/**
+ * Month overview: fixed payments (paid / to pay) and food-fuel budgets (spent / planned) apart,
+ * then where the income goes — costs, savings, free money — in total and per person.
+ */
+function summaryCard({ month, categories, settings }) {
+  const o = computeMonthOverview(month, categories, settings);
   const card = el('div', { class: 'card stat-card stat-card--wide' });
   card.appendChild(el('div', { class: 'stat-card__label', ...tx('card.summary') }));
 
-  const grid = el('div', { class: 'summary-grid' });
-  grid.appendChild(summaryCell('summary.planned', formatMoney(totals.planned, 'EUR')));
-  grid.appendChild(summaryCell('summary.paid', formatMoney(totals.paid, 'EUR')));
-  grid.appendChild(summaryCell('summary.income', formatMoney(totalIncome(month), 'EUR')));
-  grid.appendChild(summaryCell('summary.left', formatMoney(totalIncome(month) - totals.paid, 'EUR')));
-  card.appendChild(grid);
-  card.appendChild(progressBar(pct));
-  return card;
-}
+  const progressLine = (labelKey, done, planned, doneWord) => {
+    const pct = planned > 0 ? Math.min(100, (done / planned) * 100) : 0;
+    return el('div', { class: 'summary-line' }, [
+      el('div', { class: 'summary-line__top' }, [
+        el('span', { class: 'stat-card__sub', ...tx(labelKey) }),
+        el('span', { class: 'summary-line__value tabular-nums', text: `${formatMoney(done, 'EUR', 0)} / ${formatMoney(planned, 'EUR', 0)}` })
+      ]),
+      progressBar(pct, done > planned + 0.5 ? 'var(--danger)' : undefined),
+      el('div', { class: 'stat-card__sub tabular-nums', text: `${doneWord} ${formatMoney(done, 'EUR')} · დარჩა ${formatMoney(Math.max(0, planned - done), 'EUR')}` })
+    ]);
+  };
+  card.appendChild(progressLine('summary.bills', o.bills.paid, o.bills.planned, 'გადახდილი'));
+  if (o.budgets.planned > 0.004) card.appendChild(progressLine('summary.budgets', o.budgets.used, o.budgets.planned, 'დახარჯული'));
 
-function summaryCell(labelKey, value) {
-  return el('div', { class: 'summary-grid__cell' }, [
-    el('div', { class: 'stat-card__sub', ...tx(labelKey) }),
-    el('div', { class: 'summary-grid__value tabular-nums', text: value })
+  const m0 = (v) => formatMoney(v, 'EUR', 0);
+  const table = el('table', { class: 'split-table summary-table tabular-nums' });
+  table.appendChild(el('thead', {}, [el('tr', {}, [
+    el('th', { text: '' }), el('th', tx('summary.total')), el('th', tx('person.giorgi')), el('th', tx('person.nino'))
+  ])]));
+  const row = (labelKey, k, cls = '') => el('tr', { class: cls }, [
+    el('th', { scope: 'row', ...tx(labelKey) }),
+    ...[o.total, o.giorgi, o.nino].map((p, i) => el('td', { class: (i === 0 ? 'summary-table__total' : '') + (p[k] < -0.5 ? ' text-danger' : ''), text: m0(p[k]) }))
   ]);
+  table.appendChild(el('tbody', {}, [
+    row('summary.income', 'income', 'split-table__income'),
+    row('summary.costs', 'costs'),
+    row('summary.savings', 'savings'),
+    row('summary.free', 'free', 'summary-table__free')
+  ]));
+  card.appendChild(table);
+  card.appendChild(el('div', { class: 'stat-card__sub', text: 'ხარჯები = გადასახადები + კვება/საწვავი (საერთო ხარჯი 50/50). დანაზოგი ხარჯში არ ითვლება.' }));
+  return card;
 }
 
 function incomeCard({ month, key, rerender }) {
@@ -309,17 +329,26 @@ function rateCard({ month, key, rerender }) {
     savedToast();
     rerender();
   }, 4));
-  const fetchBtn = el('button', { class: 'icon-btn icon-btn--sm', type: 'button', 'aria-label': 'საქართველოს ბანკის კურსის ჩამოტვირთვა', title: 'საქართველოს ბანკის ყიდვის კურსი', text: '🏦' });
+  const fetchBtn = el('button', { class: 'icon-btn icon-btn--sm rate-btn', type: 'button', 'aria-label': 'საქართველოს ბანკის კურსის ჩამოტვირთვა', title: 'საქართველოს ბანკის ყიდვის კურსი', text: '🏦' });
+  // A request may still be running from before a redraw — show it on the new button too.
+  const showWait = () => {
+    if (!rateWait) return;
+    fetchBtn.disabled = true;
+    fetchBtn.textContent = `⏳ ${Math.round((Date.now() - rateWait) / 1000)}წ`;
+  };
+  showWait();
+  const ticker = setInterval(() => { if (!fetchBtn.isConnected || !rateWait) { clearInterval(ticker); return; } showWait(); }, 1000);
   fetchBtn.addEventListener('click', async () => {
+    if (rateWait) return;
     fetchBtn.disabled = true;
     try {
       let r = null;
       if (getRatesToken()) {
-        // Ask GitHub to fetch the bank rate right now and wait for it (~30–90 s).
+        // Ask GitHub to fetch the bank rate right now and wait for it (usually 20–60 s).
         toast('🏦 ბანკიდან ახალი კურსის მოთხოვნა… (~1 წუთი)');
-        fetchBtn.textContent = '⏳';
-        r = await fetchFreshRateNow();
-        fetchBtn.textContent = '🏦';
+        rateWait = Date.now();
+        showWait();
+        try { r = await fetchFreshRateNow(); } finally { rateWait = 0; }
         if (!r) toast('ახალი კურსი ჯერ არ მოვიდა — ვიყენებ ბოლოს მიღებულს', 'error');
       }
       if (!r) r = await fetchEurGelRate();
@@ -336,7 +365,7 @@ function rateCard({ month, key, rerender }) {
       rerender();
     } catch (e) {
       toast(e.message, 'error');
-      fetchBtn.disabled = false;
+      rerender();
     }
   });
   row.appendChild(fetchBtn);
@@ -352,8 +381,18 @@ function rateCard({ month, key, rerender }) {
   return card;
 }
 
+/** Paid-in-full look: green frame + "✓ …" line, so a done card is seen at a glance. */
+function markDone(card, text) {
+  card.classList.add('card--done');
+  card.style.borderLeft = '';
+  // below the title + amount line, so the two stay on one line
+  const anchor = card.querySelector(':scope > .stat-card__value') || card.querySelector(':scope > .stat-card__label');
+  card.insertBefore(el('div', { class: 'done-badge', text: `✓ ${text}` }), anchor ? anchor.nextSibling : card.firstChild);
+  return card;
+}
+
 function georgiaCard(ctx) {
-  const { dash, categories } = ctx;
+  const { dash, categories, month } = ctx;
   const pct = dash.georgia.plannedEur > 0 ? Math.min(100, (dash.georgia.actualEur / dash.georgia.plannedEur) * 100) : 0;
   const card = statCard({
     labelKey: 'card.georgia',
@@ -362,6 +401,8 @@ function georgiaCard(ctx) {
     pct,
     color: '#d97706'
   });
+  const items = month.transactions.filter(tr => isGeorgia(tr, categories) && !isExtra(tr));
+  if (items.length && items.every(tr => tr.paid)) markDone(card, 'ყველაფერი გადარიცხულია');
   const essentials = categories.find(c => c.id === 'cat_essentials');
   return attachDetails(card, 'georgia', ctx, (tr) => isGeorgia(tr, categories), { toGeorgia: true, categoryId: essentials ? essentials.id : undefined });
 }
@@ -379,27 +420,37 @@ function categoryCard(b, ctx) {
   const card = statCard({ label: b.name, value: formatMoney(b.planned, 'EUR'), sub, pct, color: b.color });
   if (isSaving && b.planned > 0.004) {
     const open = b.toTransfer > 0.5;
-    const status = el('div', { class: 'saving-status' + (open ? ' saving-status--open' : ' saving-status--done') }, [
-      el('span', { text: open ? `⏳ ჯერ არ გადარიცხულა: ${formatMoney(b.toTransfer, 'EUR', 0)}` : '✓ გადარიცხულია' })
-    ]);
     if (open) {
+      const status = el('div', { class: 'saving-status saving-status--open' }, [
+        el('span', { text: `⏳ ჯერ არ გადარიცხულა: ${formatMoney(b.toTransfer, 'EUR', 0)}` })
+      ]);
       const btn = el('button', { type: 'button', class: 'pay-btn', text: '✓ გადავრიცხე' });
       btn.addEventListener('click', (e) => { e.stopPropagation(); openSavingsTransferDialog(b, ctx); });
       status.appendChild(btn);
+      card.appendChild(status);
+    } else {
+      markDone(card, 'გადარიცხულია');
     }
-    card.appendChild(status);
   }
   return attachDetails(card, `cat:${b.id}`, ctx, (tr) => topIdOf(ctx.categories, tr.categoryId) === b.id, { categoryId: b.id });
 }
 
-/** Records the savings transfer(s) of a block: one paid entry per (sub)category with what is still missing. */
+/**
+ * Records the savings transfer(s) of a block, per (sub)category: unpaid savings entries that
+ * already exist (e.g. from a template) are marked paid first; only the rest becomes a new entry.
+ */
 function openSavingsTransferDialog(b, ctx) {
   const { month, key, categories, rerender } = ctx;
+  const rate = month.exchangeRate;
   const T = (month.income?.giorgi || 0) + (month.income?.nino || 0);
   const rows = familyOf(categories, b).map(c => {
     const target = targetEur(c, T);
-    const done = month.transactions.filter(t => t.categoryId === c.id).reduce((acc, t) => acc + txnPaidEur(t, month.exchangeRate), 0);
-    return { c, missing: Math.max(0, Math.round((target - done) * 100) / 100) };
+    const inCat = month.transactions.filter(t => t.categoryId === c.id && !isEnvelope(t) && !isExtra(t));
+    const done = inCat.reduce((acc, t) => acc + txnPaidEur(t, rate), 0);
+    const unpaid = inCat.filter(t => !t.paid).sort((x, y) => (x.dueDate || '').localeCompare(y.dueDate || ''));
+    const open = unpaid.reduce((acc, t) => acc + txnPlannedEur(t, rate), 0);
+    const goal = Math.max(target, done + open);
+    return { c, unpaid, missing: Math.max(0, Math.round((goal - done) * 100) / 100) };
   }).filter(r => r.missing > 0.004);
   if (!rows.length) { toast('ყველაფერი უკვე გადარიცხულია ✓'); return; }
   const form = el('form', {});
@@ -416,13 +467,28 @@ function openSavingsTransferDialog(b, ctx) {
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     const made = [];
+    const before = []; // copies of existing entries marked paid here (for ↩ undo)
     updateState(d => {
+      const list = d.months[key].transactions;
       inputs.forEach(({ r, cb, amt }) => {
         if (!cb.checked) return;
-        const v = parseAmountInput(amt.value);
+        let v = parseAmountInput(amt.value);
         if (!(v > 0)) return;
+        r.unpaid.forEach(u => {
+          if (v <= 0.004) return;
+          const tr = list.find(t => t.id === u.id);
+          if (!tr || tr.paid) return;
+          const plannedEur = txnPlannedEur(tr, rate);
+          const part = Math.min(v, plannedEur);
+          before.push(JSON.parse(JSON.stringify(tr)));
+          tr.paid = true; tr.paidAt = todayISO(); tr.rateAtPayment = null;
+          tr.amountActual = part >= plannedEur - 0.004 ? tr.amountPlanned
+            : Math.round((tr.currency === 'GEL' ? part * rate : part) * 100) / 100;
+          v = Math.round((v - part) * 100) / 100;
+        });
+        if (v <= 0.004) return;
         const id = `txn_save_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
-        d.months[key].transactions.push({
+        list.push({
           id, templateId: null, name: r.c.name, categoryId: r.c.id, owner: r.c.owner || 'shared', account: r.c.owner || 'shared',
           toGeorgia: false, currency: 'EUR', amountPlanned: v, amountActual: v, paid: true, paidAt: todayISO(),
           rateAtPayment: null, dueDate: todayISO(), note: 'დანაზოგის გადარიცხვა'
@@ -432,8 +498,13 @@ function openSavingsTransferDialog(b, ctx) {
       return d;
     });
     close();
-    undoToast(`ჩაიწერა ${made.length} გადარიცხვა ✓`, () => {
-      updateState(d => { d.months[key].transactions = d.months[key].transactions.filter(t => !made.includes(t.id)); return d; });
+    undoToast(`ჩაიწერა ${made.length + before.length} გადარიცხვა ✓`, () => {
+      updateState(d => {
+        const m = d.months[key];
+        m.transactions = m.transactions.filter(t => !made.includes(t.id))
+          .map(t => { const old = before.find(x => x.id === t.id); if (!old) return t; const c = { ...old }; delete c._u; return c; });
+        return d;
+      });
       rerender();
     });
     rerender();
@@ -472,85 +543,15 @@ function freePersonBlock(label, person) {
   return block;
 }
 
-function planVsActualCard({ pva }) {
-  const card = el('div', { class: 'card', style: 'grid-column: 1 / -1' });
-  card.appendChild(el('div', { class: 'card__title', ...tx('card.planVsActual') }));
-
-  const rowsWrap = el('div', {});
-  pva.forEach(row => {
-    const r = el('div', { class: 'pva-row' });
-    r.appendChild(el('div', { class: 'pva-row__label' }, [
-      el('span', { text: row.label }),
-      el('span', {
-        class: `pva-row__delta ${row.ok ? 'pva-row__delta--ok' : 'pva-row__delta--bad'}`,
-        text: `${formatPercent(row.actual, 0)} · გეგმა ${formatPercent(row.target, 0)}`
-      })
-    ]));
-    const bar = el('div', { class: 'progress progress--with-target progress--compact' });
-    bar.appendChild(el('div', {
-      class: 'progress__fill',
-      style: `width:${Math.max(0, Math.min(100, row.actual))}%;background:${row.color}`
-    }));
-    bar.appendChild(el('div', { class: 'progress__target-marker', style: `left:${Math.max(0, Math.min(100, row.target))}%` }));
-    r.appendChild(bar);
-    rowsWrap.appendChild(r);
-  });
-  card.appendChild(rowsWrap);
-  card.appendChild(renderDonut(pva));
-  return card;
-}
-
-function renderDonut(pva) {
-  const wrap = el('div', { class: 'donut-wrap' });
-  const total = pva.reduce((s, r) => s + Math.max(0, r.actual), 0) || 1;
-  const size = 110, r = 42, cx = 55, cy = 55, circumference = 2 * Math.PI * r;
-  let offset = 0;
-
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', `0 0 ${size} ${size}`);
-  svg.setAttribute('width', size);
-  svg.setAttribute('height', size);
-
-  const bg = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-  bg.setAttribute('cx', cx); bg.setAttribute('cy', cy); bg.setAttribute('r', r);
-  bg.setAttribute('fill', 'none'); bg.setAttribute('stroke', 'var(--border)'); bg.setAttribute('stroke-width', 14);
-  svg.appendChild(bg);
-
-  pva.forEach(row => {
-    const frac = Math.max(0, row.actual) / total;
-    const len = frac * circumference;
-    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-    circle.setAttribute('cx', cx); circle.setAttribute('cy', cy); circle.setAttribute('r', r);
-    circle.setAttribute('fill', 'none');
-    circle.setAttribute('stroke', row.color);
-    circle.setAttribute('stroke-width', 14);
-    circle.setAttribute('stroke-dasharray', `${len} ${circumference - len}`);
-    circle.setAttribute('stroke-dashoffset', String(-offset));
-    circle.setAttribute('transform', `rotate(-90 ${cx} ${cy})`);
-    svg.appendChild(circle);
-    offset += len;
-  });
-
-  wrap.appendChild(svg);
-
-  const legend = el('div', { class: 'donut-legend' });
-  pva.forEach(row => {
-    legend.appendChild(el('div', { class: 'donut-legend__item' }, [
-      el('span', { class: 'donut-legend__swatch', style: `background:${row.color}` }),
-      el('span', { text: `${row.label} — ${formatPercent(row.actual)}` })
-    ]));
-  });
-  wrap.appendChild(legend);
-
-  return wrap;
-}
-
 function yearCard({ state, key, goToMonth, rerender }) {
   // Period: remembered per device; default = the selected month's calendar year.
   const year = Number(key.slice(0, 4));
   const saved = getUiPref('overviewRange', null);
-  const from = saved && saved.from ? saved.from : `${year}-01`;
-  const to = saved && saved.to ? saved.to : `${year}-12`;
+  const cur = monthKey();
+  // "last N months" is kept relative, so it moves on with the calendar.
+  const lastN = saved && saved.last > 0 ? Math.min(240, Math.round(saved.last)) : 0;
+  const from = lastN ? shiftKey(cur, 1 - lastN) : (saved && saved.from ? saved.from : `${year}-01`);
+  const to = lastN ? cur : (saved && saved.to ? saved.to : `${year}-12`);
   const yo = computeRangeOverview(state.months, state.categories, from, to);
   const card = el('div', { class: 'card', style: 'grid-column: 1 / -1' });
   card.appendChild(el('div', { class: 'card__title', ...tx('card.year') }));
@@ -560,23 +561,32 @@ function yearCard({ state, key, goToMonth, rerender }) {
   const apply = (f, tt) => { setUiPref('overviewRange', f && tt ? { from: f <= tt ? f : tt, to: f <= tt ? tt : f } : null); rerender(); };
   fromIn.addEventListener('change', () => apply(fromIn.value, toIn.value));
   toIn.addEventListener('change', () => apply(fromIn.value, toIn.value));
-  const cur = monthKey();
-  const quick = (label, f, tt) => {
-    const b = el('button', { type: 'button', class: 'filter-btn', 'aria-pressed': String(f === from && tt === to), text: label });
-    b.addEventListener('click', () => apply(f, tt));
-    return b;
-  };
-  const allKeys = Object.keys(state.months).sort();
+
+  const thisYear = !lastN && from === `${cur.slice(0, 4)}-01` && to === `${cur.slice(0, 4)}-12`;
+  const yearBtn = el('button', { type: 'button', class: 'filter-btn', 'aria-pressed': String(thisYear), text: 'ეს წელი' });
+  yearBtn.addEventListener('click', () => apply(`${cur.slice(0, 4)}-01`, `${cur.slice(0, 4)}-12`));
+  // "ბოლო [N] თვე": pick from the list, or "სხვა…" and type any number.
+  const PRESETS = [2, 3, 4, 6, 9, 12, 18, 24, 36];
+  const lastSel = el('select', { class: 'period__last' + (lastN ? ' period__last--on' : ''), 'aria-label': 'ბოლო რამდენი თვე' }, [
+    el('option', { value: '', text: 'ბოლო — თვე' }),
+    ...PRESETS.map(n => el('option', { value: String(n), text: `ბოლო ${n} თვე` })),
+    ...(lastN && !PRESETS.includes(lastN) ? [el('option', { value: String(lastN), text: `ბოლო ${lastN} თვე` })] : []),
+    el('option', { value: 'other', text: 'სხვა რაოდენობა…' })
+  ]);
+  lastSel.value = lastN ? String(lastN) : '';
+  const lastIn = el('input', { type: 'number', inputmode: 'numeric', min: '1', max: '240', class: 'period__lastnum', placeholder: 'თვე', 'aria-label': 'რამდენი თვე', hidden: 'true' });
+  const setLast = (n) => { if (n > 0) { setUiPref('overviewRange', { last: Math.min(240, Math.round(n)) }); rerender(); } };
+  lastSel.addEventListener('change', () => {
+    if (lastSel.value === 'other') { lastIn.hidden = false; lastIn.focus(); return; }
+    if (lastSel.value) setLast(Number(lastSel.value));
+  });
+  lastIn.addEventListener('change', () => setLast(Number(lastIn.value)));
+  lastIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') setLast(Number(lastIn.value)); });
   card.appendChild(el('div', { class: 'period' }, [
-    el('div', { class: 'period__inputs' }, [fromIn, el('span', { text: '—' }), toIn]),
-    el('div', { class: 'filter-row' }, [
-      quick('ეს წელი', `${cur.slice(0, 4)}-01`, `${cur.slice(0, 4)}-12`),
-      quick('ბოლო 12 თვე', shiftKey(cur, -11), cur),
-      quick('ბოლო 3 თვე', shiftKey(cur, -2), cur),
-      allKeys.length ? quick('ყველა', allKeys[0], allKeys[allKeys.length - 1]) : null
-    ])
+    el('div', { class: 'period__inputs' }, [fromIn, el('span', { class: 'period__dash', text: '—' }), toIn]),
+    el('div', { class: 'filter-row period__quick' }, [yearBtn, lastSel, lastIn])
   ]));
-  card.appendChild(el('div', { class: 'card__sub', text: 'ფაქტი: მხოლოდ გადახდილი ტრანზაქციები. თვეზე დაჭერით გადახვალ იმ თვეში.' }));
+  card.appendChild(el('div', { class: 'card__sub', text: 'ფაქტი: მხოლოდ გადახდილი ტრანზაქციები (თვე, სადაც ჯერ არაფერია გადახდილი, არ ჩანს). თვეზე დაჭერით გადახვალ იმ თვეში.' }));
 
   if (!yo.rows.length) {
     card.appendChild(el('div', { class: 'empty-state', text: 'ამ პერიოდში მონაცემები არ არის' }));
@@ -606,14 +616,14 @@ function yearCard({ state, key, goToMonth, rerender }) {
   });
   table.appendChild(tbody);
   const t = yo.totals, a = yo.average;
+  // Total and average are set apart from the months (own rows with a gap and a tint).
   table.appendChild(el('tfoot', {}, [
-    el('tr', {}, [el('th', { text: 'ჯამი' }), el('th', { text: m0(t.income) }), el('th', { text: m0(t.spent) }), el('th', { text: m0(t.saved) }), el('th', { text: m0(t.leftover) })]),
+    el('tr', { class: 'year-table__gap', 'aria-hidden': 'true' }, [el('td', { colspan: '5' })]),
+    el('tr', { class: 'year-table__sum' }, [el('th', { text: 'ჯამი' }), el('th', { text: m0(t.income) }), el('th', { text: m0(t.spent) }), el('th', { text: m0(t.saved) }), el('th', { text: m0(t.leftover) })]),
+    el('tr', { class: 'year-table__gap', 'aria-hidden': 'true' }, [el('td', { colspan: '5' })]),
     el('tr', { class: 'year-table__avg' }, [el('td', { text: 'საშ./თვე' }), el('td', { text: m0(a.income) }), el('td', { text: m0(a.spent) }), el('td', { text: m0(a.saved) }), el('td', { text: m0(a.leftover) })])
   ]));
   card.appendChild(el('div', { class: 'year-table-wrap' }, [table]));
-  if (t.georgia > 0) {
-    card.appendChild(el('div', { class: 'stat-card__sub', style: 'margin-top:6px', text: `📤 საქართველოში გადარიცხულია ამ პერიოდში: ${formatMoney(t.georgia, 'EUR')} (ხარჯის ნაწილია)` }));
-  }
   return card;
 }
 
@@ -655,27 +665,26 @@ function prepareCards(state, key, open, redraw) {
 
 function dueCard(ctx) {
   const { month } = ctx;
+  // Only fixed payments (bills). Food/fuel budgets have their own card, savings their own blocks.
   const rem = computeRemaining(month, ctx.categories, ctx.settings);
   const card = el('div', { class: 'card stat-card stat-card--wide due-card' });
   card.appendChild(el('div', { class: 'stat-card__label', ...tx('card.due') }));
-  card.appendChild(el('div', { class: 'stat-card__value tabular-nums', text: formatMoney(rem.total, 'EUR') }));
-  if (rem.total <= 0.004) {
-    card.appendChild(el('div', { class: 'stat-card__sub text-success', text: 'ყველაფერი გადახდილია ✓' }));
-    return card;
+  card.appendChild(el('div', { class: 'stat-card__value tabular-nums', text: formatMoney(rem.bills, 'EUR') }));
+  const isBill = (tr) => !isEnvelope(tr) && !isExtra(tr) && !isSavingsTxn(tr, ctx.categories);
+  if (rem.bills <= 0.004) {
+    if (month.transactions.some(isBill)) markDone(card, 'ყველა გადასახადი გადახდილია');
+    else card.appendChild(el('div', { class: 'stat-card__sub', text: 'ამ თვეში გადასახადები ჯერ არ არის.' }));
+    return attachDetails(card, 'due', ctx, (tr) => isBill(tr));
   }
-  const parts = [];
-  if (rem.bills > 0.004) parts.push(`გადასახადები ${formatMoney(rem.bills, 'EUR')}`);
-  if (rem.envelopes > 0.004) parts.push(`ყოველდღიურ ბიუჯეტებში დარჩა ${formatMoney(rem.envelopes, 'EUR')}`);
-  if (rem.savings > 0.004) parts.push(`💰 დანაზოგზე გადასატანი ${formatMoney(rem.savings, 'EUR')}`);
-  card.appendChild(el('div', { class: 'stat-card__sub tabular-nums', text: parts.join(' · ') }));
+  card.appendChild(el('div', { class: 'stat-card__sub tabular-nums', text: `${rem.next.length} გადასახადი გადასახდელია (დანაზოგი და კვება/საწვავი აქ არ ითვლება)` }));
   const acc = el('div', { class: 'due-card__accounts tabular-nums' });
-  Object.entries(rem.byAccount).forEach(([a, v]) => {
+  Object.entries(rem.billsByAccount).forEach(([a, v]) => {
     if (v > 0.004) acc.appendChild(el('span', { class: 'chip', text: `👤 ${PAYER_LABELS[a]}: ${formatMoney(v, 'EUR', 0)}` }));
   });
   card.appendChild(acc);
   const next = rem.next.slice(0, 2).map(t => `${t.name} ${formatDate(t.dueDate).slice(0, 5)}`).join(' · ');
   if (next) card.appendChild(el('div', { class: 'stat-card__sub', text: `შემდეგი: ${next}` }));
-  return attachDetails(card, 'due', ctx, (tr) => txnRemainingEur(tr, month.exchangeRate) > 0.004 && !isEnvelope(tr));
+  return attachDetails(card, 'due', ctx, (tr) => isBill(tr) && txnRemainingEur(tr, month.exchangeRate) > 0.004);
 }
 
 // ---------------- Envelopes (food, fuel…) ----------------
@@ -685,11 +694,14 @@ function envelopesCard({ month, key, rerender }) {
   if (!envs.length) return [];
   const card = el('div', { class: 'card stat-card stat-card--wide' });
   card.appendChild(el('div', { class: 'stat-card__label', ...tx('card.envelopes') }));
+  const leftAll = envs.reduce((acc, t) => acc + txnRemainingEur(t, month.exchangeRate, month.transactions), 0);
+  card.appendChild(el('div', { class: 'stat-card__value tabular-nums', text: `დარჩა ${formatMoney(leftAll, 'EUR', 0)}` }));
   envs.forEach(t => {
-    const spent = envelopeSpent(t);
+    // Extras bought with this money (🧺 card) are part of what is spent from it.
+    const extrasFromIt = envelopeExtras(t, month.transactions, month.exchangeRate);
+    const spent = envelopeSpent(t) + extrasFromIt;
     const left = (t.amountPlanned || 0) - spent;
     const pct = t.amountPlanned > 0 ? Math.min(100, (spent / t.amountPlanned) * 100) : 0;
-    const extrasFromIt = month.transactions.filter(x => isExtra(x) && x.fromEnvelope === t.id).reduce((acc, x) => acc + (x.amountActual ?? 0), 0);
     // How much per day is left until the end of the month (current month only).
     let perDay = '';
     if (t.dailyHint !== false && key === monthKey() && !t.paid && left > 0.5) {
@@ -805,7 +817,7 @@ function extrasCard(ctx) {
       });
       return d;
     });
-    toast(`🧺 ${n} — ${formatMoney(v, 'EUR')} ✓`);
+    toast(`🧺 ${n} — ${formatMoney(v, 'EUR')} ✓${env ? ` (${env.name}-ს დააკლდა)` : ''}`);
     rerender();
   };
   add.addEventListener('click', (e) => { e.stopPropagation(); submit(); });
@@ -813,9 +825,23 @@ function extrasCard(ctx) {
   card.appendChild(el('div', { class: 'extras__form' }, [name, amount, from, add]));
 
   if (!extras.length) {
-    card.appendChild(el('div', { class: 'stat-card__sub', text: 'ბიუჯეტიდან ნაყიდი „სხვა" რამ (ფეხსაცმელი, წამალი…) აქ ჩაწერე — თვის ბოლოს ნახავ სიას და ჯამს, და რეალურად რამდენი წავიდა კვებაზე.' }));
+    card.appendChild(el('div', { class: 'stat-card__sub', text: 'ბიუჯეტიდან ნაყიდი „სხვა" რამ (ფეხსაცმელი, წამალი…) აქ ჩაწერე — ის აკლდება იმ ბიუჯეტს (კვება, საწვავი), რომლის ფულიდანაც იყიდე.' }));
     return card;
   }
+  // "real food cost" = what was spent from the envelope minus the extras bought with it
+  envs.forEach(e => {
+    const fromIt = envelopeExtras(e, extras, month.exchangeRate);
+    if (fromIt > 0) {
+      const own = envelopeSpent(e);
+      card.appendChild(el('div', { class: 'stat-card__sub tabular-nums', text: `🛒 ${e.name}: ${formatMoney(own, e.currency, 0)} + დამატებითი ${formatMoney(fromIt, e.currency, 0)} = ${formatMoney(own + fromIt, e.currency, 0)} / ${formatMoney(e.amountPlanned, e.currency, 0)}` }));
+    }
+  });
+  // The list folds away — it only grows during the month.
+  const open = expanded.has('extras');
+  const toggle = el('button', { type: 'button', class: 'card-expand', 'aria-expanded': String(open), text: open ? '▲ დამალვა' : `▼ ${extras.length} ჩანაწერი — ნახვა` });
+  toggle.addEventListener('click', (e) => { e.stopPropagation(); if (open) expanded.delete('extras'); else expanded.add('extras'); rerender(); });
+  card.appendChild(toggle);
+  if (!open) return card;
   const list = el('div', { class: 'extras__list' });
   extras.forEach(x => {
     const env = envs.find(e => e.id === x.fromEnvelope);
@@ -837,14 +863,6 @@ function extrasCard(ctx) {
     ]));
   });
   card.appendChild(list);
-  // "real food cost" = envelope spent minus extras bought from it
-  envs.forEach(e => {
-    const fromIt = extras.filter(x => x.fromEnvelope === e.id).reduce((acc, x) => acc + (x.amountActual ?? 0), 0);
-    if (fromIt > 0) {
-      const spent = envelopeSpent(e);
-      card.appendChild(el('div', { class: 'stat-card__sub tabular-nums', text: `🛒 ${e.name}: დახარჯული ${formatMoney(spent, 'EUR', 0)}, აქედან დამატებითი ${formatMoney(fromIt, 'EUR', 0)} → თვითონ ${e.name} ≈ ${formatMoney(spent - fromIt, 'EUR', 0)}` }));
-    }
-  });
   return card;
 }
 
@@ -854,7 +872,6 @@ const CARD_RENDERERS = {
   rate: rateCard,
   georgia: georgiaCard,
   free: freeCard,
-  planVsActual: planVsActualCard,
   year: yearCard,
   due: dueCard,
   envelopes: envelopesCard,

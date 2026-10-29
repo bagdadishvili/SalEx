@@ -33,7 +33,8 @@ export function familyOf(categories, top) {
 
 // ---- "Extra" purchases (shoes, medicine… bought outside the plan) ----
 // kind 'extra'; if paid from an envelope's money (fromEnvelope = that envelope txn id) it is
-// NOT counted again in totals — it only explains where the envelope's money went.
+// part of that envelope's spending (v16): it counts as paid money and lowers what is left
+// in the envelope. Its planned amount is 0 — the envelope's plan already covers it.
 
 export function isExtra(txn) {
   return !!txn && txn.kind === 'extra';
@@ -50,6 +51,21 @@ export function envelopeSpent(txn) {
   return (txn.spends || []).reduce((s, x) => s + (Number(x.amount) || 0), 0);
 }
 
+/** Extras bought with this envelope's money (in the envelope's currency). */
+export function envelopeExtras(env, txns, monthRate) {
+  if (!Array.isArray(txns)) return 0;
+  return txns.filter(x => isExtra(x) && x.fromEnvelope === env.id).reduce((s, x) => {
+    const amt = Number(x.amountActual ?? x.amountPlanned) || 0;
+    if (x.currency === env.currency) return s + amt;
+    return s + (env.currency === 'GEL' ? amt * (monthRate || 0) : gelToEur(amt, monthRate));
+  }, 0);
+}
+
+/** Everything that went out of an envelope: its own spends + extras paid from it. */
+export function envelopeUsed(env, txns, monthRate) {
+  return envelopeSpent(env) + envelopeExtras(env, txns, monthRate);
+}
+
 function toEur(amount, txn, monthRate) {
   if (txn.currency !== 'GEL') return amount;
   const rate = txn.paid && txn.rateAtPayment ? txn.rateAtPayment : monthRate;
@@ -58,17 +74,19 @@ function toEur(amount, txn, monthRate) {
 
 /** Money already gone (EUR): paid transactions, or what has been spent from an envelope so far. */
 export function txnPaidEur(txn, monthRate) {
-  if (isExtra(txn) && txn.fromEnvelope) return 0;
   if (isEnvelope(txn)) return toEur(envelopeSpent(txn), txn, monthRate);
   return txn.paid ? txnAmountEur(txn, monthRate) : 0;
 }
 
-/** Money still to go out this month (EUR): unpaid bills + what is left in open envelopes. */
-export function txnRemainingEur(txn, monthRate) {
+/**
+ * Money still to go out this month (EUR): unpaid bills + what is left in open envelopes.
+ * Pass the month's transactions so extras bought from an envelope lower what is left in it.
+ */
+export function txnRemainingEur(txn, monthRate, txns = null) {
   if (isExtra(txn)) return 0;
   if (isEnvelope(txn)) {
     if (txn.paid) return 0; // envelope closed for the month
-    return Math.max(0, toEur((txn.amountPlanned || 0) - envelopeSpent(txn), txn, monthRate));
+    return Math.max(0, toEur((txn.amountPlanned || 0) - envelopeUsed(txn, txns, monthRate), txn, monthRate));
   }
   return txn.paid ? 0 : txnPlannedEur(txn, monthRate);
 }
@@ -133,7 +151,7 @@ function sumFreeByOwner(month, categories, owner, usePaidActual) {
  * The dashboard card order actually rendered: stored order, cleaned of stale ids,
  * with any new top-level categories inserted before the free-money card.
  */
-export const FIXED_CARDS = ['summary', 'due', 'envelopes', 'extras', 'income', 'rate', 'georgia', 'free', 'split', 'planVsActual', 'year'];
+export const FIXED_CARDS = ['summary', 'due', 'envelopes', 'extras', 'income', 'rate', 'georgia', 'free', 'split', 'year'];
 
 export function effectiveCardOrder(settings, categories) {
   const fixed = FIXED_CARDS;
@@ -192,7 +210,9 @@ export function computeDashboard(month, categories, settings) {
     const target = fam.reduce((acc, c) => acc + targetEur(c, T), 0);
     const targetPercent = T > 0 ? (target / T) * 100 : fam.reduce((acc, c) => acc + targetPct(c, T), 0);
     // Savings-type blocks: the target IS the plan (money to move), even before any transaction exists.
-    const planned = b.goalType === 'min' ? Math.max(target, bills) : bills;
+    // Counted per (sub)category, like the salary split and the "transferred" dialog.
+    const catPlanned = (id) => month.transactions.filter(t => t.categoryId === id).reduce((s, t) => s + txnPlannedEur(t, month.exchangeRate), 0);
+    const planned = b.goalType === 'min' ? Math.max(bills, fam.reduce((acc, c) => acc + Math.max(targetEur(c, T), catPlanned(c.id)), 0)) : bills;
     return { ...b, planned, bills, actual, target, targetPercent, toTransfer: b.goalType === 'min' ? Math.max(0, planned - actual) : 0, pct: pct(planned) };
   });
   const bucketsPlannedTotal = buckets.reduce((s, b) => s + b.planned, 0);
@@ -232,7 +252,7 @@ export function computeMonthTotals(month) {
   month.transactions.forEach(t => {
     planned += txnPlannedEur(t, month.exchangeRate);
     paid += txnPaidEur(t, month.exchangeRate);
-    const rem = txnRemainingEur(t, month.exchangeRate);
+    const rem = txnRemainingEur(t, month.exchangeRate, month.transactions);
     if (rem > 0.004) { unpaid += rem; unpaidCount += 1; }
   });
   return { planned, paid, unpaid, unpaidCount, count: month.transactions.length };
@@ -242,12 +262,20 @@ export const ACCOUNTS = ['shared', 'giorgi', 'nino'];
 // Who pays = from whose bank account the money leaves (also whose free money it reduces).
 export const ACCOUNT_LABELS = { shared: 'საერთო', giorgi: 'გიორგი', nino: 'ნინო' };
 
+/** Is this transaction money moved to savings (its top category has goal "min")? */
+export function isSavingsTxn(txn, categories) {
+  if (!categories) return false;
+  const top = resolveTopCategory(categories, txn.categoryId);
+  return !!top && top.parentId !== FREE_BUCKET_ID && top.goalType === 'min';
+}
+
 /**
  * What still has to go out this month, total and per paying account.
- * bills = unpaid regular transactions; envelopes = what is left in open envelopes.
+ * bills = unpaid fixed payments (no savings, no envelopes) — billsByAccount is their split;
+ * envelopes = what is left in open envelopes (food, fuel…); savings = not yet transferred.
  */
 export function computeRemaining(month, categories = null, settings = null) {
-  const out = { total: 0, bills: 0, envelopes: 0, savings: 0, count: 0, byAccount: { shared: 0, giorgi: 0, nino: 0 }, next: [] };
+  const out = { total: 0, bills: 0, envelopes: 0, savings: 0, count: 0, byAccount: { shared: 0, giorgi: 0, nino: 0 }, billsByAccount: { shared: 0, giorgi: 0, nino: 0 }, next: [] };
   // Savings targets not transferred yet (per (sub)category, by whose they are).
   if (categories) {
     const T = totalIncome(month);
@@ -257,7 +285,7 @@ export function computeRemaining(month, categories = null, settings = null) {
       const target = targetEur(c, T);
       if (target <= 0) return;
       const done = month.transactions.filter(t => t.categoryId === c.id).reduce((acc, t) => acc + Math.max(txnPaidEur(t, month.exchangeRate), 0), 0);
-      const plannedOpen = month.transactions.filter(t => t.categoryId === c.id).reduce((acc, t) => acc + txnRemainingEur(t, month.exchangeRate), 0);
+      const plannedOpen = month.transactions.filter(t => t.categoryId === c.id).reduce((acc, t) => acc + txnRemainingEur(t, month.exchangeRate, month.transactions), 0);
       const missing = Math.max(0, target - done - plannedOpen); // open transactions are counted below already
       if (missing <= 0.004) return;
       out.total += missing;
@@ -268,14 +296,15 @@ export function computeRemaining(month, categories = null, settings = null) {
   }
   void settings;
   month.transactions.forEach(t => {
-    const rem = txnRemainingEur(t, month.exchangeRate);
+    const rem = txnRemainingEur(t, month.exchangeRate, month.transactions);
     if (rem <= 0.004) return;
     out.total += rem;
     out.count += 1;
-    if (isEnvelope(t)) out.envelopes += rem; else out.bills += rem;
     const acc = ACCOUNTS.includes(t.account) ? t.account : 'shared';
     out.byAccount[acc] += rem;
-    if (!isEnvelope(t)) out.next.push(t);
+    if (isEnvelope(t)) out.envelopes += rem;
+    else if (isSavingsTxn(t, categories)) out.savings += rem;
+    else { out.bills += rem; out.billsByAccount[acc] += rem; out.next.push(t); }
   });
   out.next.sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
   return out;
@@ -389,8 +418,14 @@ export function computeYearOverview(months, categories, year) {
   return computeRangeOverview(months, categories, `${year}-01`, `${year}-12`, year);
 }
 
-/** Same as the year overview, for any period fromKey..toKey (YYYY-MM, inclusive). */
-export function computeRangeOverview(months, categories, fromKey, toKey, year = null) {
+/**
+ * Same as the year overview, for any period fromKey..toKey (YYYY-MM, inclusive).
+ * Only months with real payments are listed (plus the current one): a month that was just
+ * opened copies last month's income, and without this it would show that as "left over".
+ */
+export function computeRangeOverview(months, categories, fromKey, toKey, year = null, currentKey = null) {
+  const now = new Date();
+  const nowKey = currentKey || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   const minTops = new Set(categories.filter(c => !c.parentId && c.goalType === 'min').map(c => c.id));
   const rows = [];
   const keys = Object.keys(months).filter(k => k >= fromKey && k <= toKey).sort();
@@ -407,6 +442,7 @@ export function computeRangeOverview(months, categories, fromKey, toKey, year = 
     });
     const income = totalIncome(month);
     if (income === 0 && month.transactions.length === 0) continue;
+    if (spent + saved < 0.005 && key !== nowKey) continue;
     rows.push({ key, month: m, income, spent, saved, georgia, leftover: income - spent - saved });
   }
   const totals = rows.reduce((acc, r) => {
@@ -416,6 +452,36 @@ export function computeRangeOverview(months, categories, fromKey, toKey, year = 
   const n = rows.length || 1;
   const average = Object.fromEntries(Object.entries(totals).map(([k, v]) => [k, v / n]));
   return { year, from: fromKey, to: toKey, rows, totals, average };
+}
+
+/**
+ * "Month overview" card (v16): fixed payments and spend-as-you-go budgets (food, fuel…) apart,
+ * savings never counted as an expense, and the income split into costs / savings / free money
+ * — in total and per person, by the same 50/50 logic as the salary split card.
+ */
+export function computeMonthOverview(month, categories, settings) {
+  const rate = month.exchangeRate;
+  const bills = { planned: 0, paid: 0, count: 0, open: 0 };
+  const budgets = { planned: 0, used: 0 };
+  month.transactions.forEach(t => {
+    if (topIdOf(categories, t.categoryId) === FREE_BUCKET_ID || isSavingsTxn(t, categories)) return;
+    if (isEnvelope(t)) {
+      budgets.planned += txnPlannedEur(t, rate);
+      budgets.used += toEur(envelopeUsed(t, month.transactions, rate), t, rate);
+      return;
+    }
+    if (isExtra(t) && t.fromEnvelope) return; // already inside its envelope
+    bills.planned += txnPlannedEur(t, rate);
+    bills.paid += txnPaidEur(t, rate);
+    bills.count += 1;
+    if (!t.paid) bills.open += 1;
+  });
+  const sp = computeSalarySplit(month, categories, settings, { mode: 'equal' });
+  const person = (p) => ({ income: sp.persons[p].income, costs: sp.persons[p].essentials, savings: sp.persons[p].savings, free: sp.persons[p].free });
+  const giorgi = person('giorgi'), nino = person('nino');
+  const total = {};
+  Object.keys(giorgi).forEach(k => { total[k] = giorgi[k] + nino[k]; });
+  return { bills, budgets, total, giorgi, nino };
 }
 
 /** Plan-vs-actual rows: one per user bucket, plus the two free-money person splits. */
@@ -608,7 +674,31 @@ export function runSelfChecks() {
   const env2 = { id: 'food', categoryId: 'cat_essentials', currency: 'EUR', amountPlanned: 1000, kind: 'envelope', spends: [{ amount: 600 }], paid: false };
   const ex = { id: 'x', kind: 'extra', fromEnvelope: 'food', categoryId: 'cat_essentials', currency: 'EUR', amountPlanned: 50, amountActual: 50, paid: true };
   const tot2 = computeMonthTotals({ exchangeRate: 3, income: { giorgi: 0, nino: 0 }, transactions: [env2, ex] });
-  assertClose('extra from envelope not double counted', tot2.paid, 600);
+  assertClose('extra from envelope counted once as paid (600 + 50)', tot2.paid, 650);
+  assertClose('extra lowers what is left in the envelope (1000 - 650)', tot2.unpaid, 350);
+  assertClose('envelopeUsed = spends + extras', envelopeUsed(env2, [env2, ex], 3), 650);
+  // Due card: unpaid savings template is NOT a bill; envelope rest is not a bill either.
+  const remB = computeRemaining({ exchangeRate: 3, income: { giorgi: 2000, nino: 2000 }, transactions: [
+    { id: 'b1', categoryId: 'cat_essentials', currency: 'EUR', amountPlanned: 130, paid: false, account: 'nino' },
+    { id: 's1', categoryId: 'cat_savings', currency: 'EUR', amountPlanned: 263, paid: false, account: 'giorgi' }, env2, ex
+  ] }, categories, settings);
+  assertClose('due bills exclude savings + envelopes (130)', remB.bills, 130);
+  assertClose('due bills by account: nino 130', remB.billsByAccount.nino, 130);
+  assertClose('envelope rest 350 kept apart', remB.envelopes, 350);
+  // Month overview: bills vs budgets apart, savings not an expense, income = costs + savings + free.
+  const mo = computeMonthOverview({ exchangeRate: 3, income: { giorgi: 2000, nino: 2000 }, transactions: [
+    { id: 'b1', categoryId: 'cat_essentials', currency: 'EUR', amountPlanned: 130, amountActual: 130, paid: true, account: 'nino' },
+    { id: 's1', categoryId: 'cat_savings', currency: 'EUR', amountPlanned: 263, paid: false, account: 'giorgi' }, env2, ex
+  ] }, categories, settings);
+  assertClose('overview bills planned 130 (no savings)', mo.bills.planned, 130);
+  assertClose('overview budgets used 650 of 1000', mo.budgets.used, 650);
+  assertClose('overview costs 1130 = 565 each', mo.giorgi.costs, 565);
+  assertClose('overview income = costs + savings + free', mo.total.costs + mo.total.savings + mo.total.free, 4000);
+  // Period overview: an opened but unused month (income copied, nothing paid) is not listed.
+  const ro = computeRangeOverview({ '2026-01': { exchangeRate: 3, income: { giorgi: 1000, nino: 0 }, transactions: [] },
+    '2026-02': { exchangeRate: 3, income: { giorgi: 1000, nino: 0 }, transactions: [{ id: 'p', categoryId: 'cat_essentials', currency: 'EUR', amountPlanned: 10, amountActual: 10, paid: true }] } },
+  categories, '2026-01', '2026-12', null, '2026-10');
+  assertEq('period overview skips unused months', ro.rows.map(r => r.key).join(), '2026-02');
   assertClose('50/50 full: giorgi to shared 800', half.persons.giorgi.toShared, 800);
   assertClose('50/50 full: nino to shared 800', half.persons.nino.toShared, 800);
   assertClose('50/50 full: 400 back to giorgi', half.persons.giorgi.backFromShared, 400);

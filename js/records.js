@@ -40,6 +40,35 @@ function stampHead(pm, m, now) {
   m._u = changed ? now : (pm._u || m._u);
 }
 
+/** Settings as flat fields; each text is its own field (`texts.<key>`). */
+function settingsFields(s) {
+  const out = {};
+  Object.keys(s || {}).forEach(k => {
+    if (k === '_u' || k === '_uf') return;
+    if (k === 'texts' && s.texts && typeof s.texts === 'object') Object.keys(s.texts).forEach(tk => { out[`texts.${tk}`] = s.texts[tk]; });
+    else out[k] = s[k];
+  });
+  return out;
+}
+
+/**
+ * Settings are stamped PER FIELD too (v16), every text separately: renaming a card on the
+ * laptop survives a theme change or a backup made on the phone in the meantime.
+ */
+function stampSettings(ps, s, now) {
+  if (!s) return;
+  const base = (ps && ps._u) || s._u || EPOCH;
+  s._uf = { ...((ps && ps._uf) || s._uf || {}) };
+  if (!ps) { if (!s._u) s._u = now; return; }
+  const a = settingsFields(ps), b = settingsFields(s);
+  let changed = false;
+  new Set([...Object.keys(a), ...Object.keys(b)]).forEach(k => {
+    if (JSON.stringify(a[k]) !== JSON.stringify(b[k])) { s._uf[k] = now; changed = true; }
+    else if (!s._uf[k]) s._uf[k] = base;
+  });
+  s._u = changed ? now : (ps._u || s._u);
+}
+
 function stampList(prevList, nextList, deleted, now) {
   const prevMap = byId(prevList);
   const nextIds = new Set();
@@ -64,8 +93,7 @@ export function stampChanges(prev, next, now = new Date().toISOString()) {
   const deleted = next.deleted;
   stampList(prev.templates, next.templates, deleted, now);
   stampList(prev.categories, next.categories, deleted, now);
-  if (!same(prev.settings, next.settings)) next.settings._u = now;
-  else next.settings._u = (prev.settings && prev.settings._u) || next.settings._u;
+  stampSettings(prev.settings, next.settings, now);
   Object.entries(next.months || {}).forEach(([key, m]) => {
     const pm = prev.months && prev.months[key];
     stampHead(pm, m, now);
@@ -90,7 +118,11 @@ function pruneTombstones(deleted, now) {
 export function restampAll(s, now = new Date().toISOString()) {
   (s.templates || []).forEach(r => { r._u = now; });
   (s.categories || []).forEach(r => { r._u = now; });
-  if (s.settings) s.settings._u = now;
+  if (s.settings) {
+    s.settings._u = now;
+    s.settings._uf = {};
+    Object.keys(settingsFields(s.settings)).forEach(k => { s.settings._uf[k] = now; });
+  }
   Object.values(s.months || {}).forEach(m => {
     m._u = now;
     m._uf = {};
@@ -164,6 +196,41 @@ function mergeHead(ha, hb) {
   return out;
 }
 
+/**
+ * Per-field merge of the settings. A copy last written by an older app version (its `_u` is
+ * newer than all its field stamps) counts as changed as a whole, like before v16.
+ */
+function mergeSettings(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  if (same(a, b)) return pickNewer(a, b);
+  const stampOf = (s) => {
+    const uf = s._uf && typeof s._uf === 'object' ? s._uf : {};
+    const newest = Object.values(uf).reduce((m, v) => (v > m ? v : m), EPOCH);
+    const legacy = (s._u || EPOCH) > newest;
+    // a field this copy never had (and never deleted) has no stamp: the other side wins it
+    return (k) => (legacy ? (s._u || EPOCH) : (uf[k] || EPOCH));
+  };
+  const ta = stampOf(a), tb = stampOf(b);
+  const fa = settingsFields(a), fb = settingsFields(b);
+  const out = { texts: {}, _uf: {} };
+  new Set([...Object.keys(fa), ...Object.keys(fb)]).forEach(k => {
+    const xa = ta(k), xb = tb(k);
+    let fromA;
+    if (xa !== xb) fromA = xa > xb;
+    else if (!(k in fb)) fromA = true;
+    else if (!(k in fa)) fromA = false;
+    else fromA = canonical(fa[k]) >= canonical(fb[k]);
+    const v = fromA ? fa[k] : fb[k];
+    out._uf[k] = fromA ? xa : xb;
+    if (v === undefined) return;
+    if (k.startsWith('texts.')) out.texts[k.slice(6)] = v;
+    else out[k] = v;
+  });
+  out._u = (a._u || EPOCH) >= (b._u || EPOCH) ? a._u : b._u;
+  return out;
+}
+
 /** Two devices may generate the same template's transaction for a month — keep one. */
 function dedupeGenerated(txns) {
   const groups = new Map();
@@ -219,7 +286,7 @@ export function mergeStates(a, b) {
     ...newerState,
     version: Math.max(A.version || 0, B.version || 0),
     updatedAt: (A.updatedAt || EPOCH) >= (B.updatedAt || EPOCH) ? A.updatedAt : B.updatedAt,
-    settings: pickNewer(A.settings, B.settings),
+    settings: mergeSettings(A.settings, B.settings),
     categories: mergeList(A.categories, B.categories, deleted),
     templates: mergeList(A.templates, B.templates, deleted),
     months,

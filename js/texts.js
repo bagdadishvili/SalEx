@@ -29,14 +29,16 @@ export const TEXT_GROUPS = [
     'card.georgia': 'საქართველოში გადასარიცხი',
     'card.free': 'თავისუფალი თანხა',
     'card.split': '💸 ვინ რამდენი გადარიცხოს (50/50)',
-    'card.planVsActual': 'დაგეგმილი vs რეალური',
     'card.year': 'მიმოხილვა პერიოდით'
   }],
   ['summary', '📊 თვის მიმოხილვის ველები', {
-    'summary.planned': 'დაგეგმილი ხარჯი',
-    'summary.paid': 'გადახდილი',
+    'summary.bills': '📄 გადასახადები (გადახდილი / სულ)',
+    'summary.budgets': '🛒 კვება, საწვავი… (დახარჯული / გეგმა)',
+    'summary.total': 'ჯამი',
     'summary.income': 'შემოსავალი',
-    'summary.left': 'ნაშთი',
+    'summary.costs': 'ხარჯები',
+    'summary.savings': 'დანაზოგი',
+    'summary.free': 'თავისუფალი',
     'free.total': 'სულ თავისუფალი'
   }],
   ['split', '💸 გადარიცხვების ცხრილი', {

@@ -1085,3 +1085,35 @@ h1, h2, h3, h4 { margin: 0 0 var(--space-3); font-weight: 700; }
 .target-row input { flex: 1; min-width: 0; }
 .restore-row__actions { display: flex; gap: 2px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .restore-row__meta .chip { margin-top: 2px; display: inline-block; }
+
+/* ---------- v16 ---------- */
+/* paid in full: green frame + tint, so a finished card is seen at a glance */
+.card.card--done { border: 2px solid var(--success); background: linear-gradient(0deg, rgba(22, 163, 74, 0.07), rgba(22, 163, 74, 0.07)), var(--surface); }
+.done-badge { justify-self: start; display: inline-block; padding: 3px 10px; border-radius: 999px; background: var(--success); color: #fff; font-size: 0.78rem; font-weight: 700; }
+[data-theme="dark"] .done-badge { color: #0b1a10; }
+.card--done .progress__fill { background: var(--success) !important; }
+
+/* month overview */
+.summary-line { display: flex; flex-direction: column; gap: 2px; padding: 4px 0; }
+.summary-line__top { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-2); }
+.summary-line__value { font-weight: 700; white-space: nowrap; }
+.summary-table { margin-top: var(--space-2); }
+.summary-table thead th { font-size: 0.75rem; }
+.summary-table tbody th { width: auto; font-size: 0.78rem; white-space: nowrap; }
+.summary-table td { width: auto; font-size: 0.85rem; padding-left: 2px; padding-right: 2px; }
+.summary-table td.summary-table__total { font-weight: 700; }
+.summary-table__free td, .summary-table__free th { font-weight: 800; color: var(--text); }
+
+/* period: both month fields always side by side; "this year" + "last N months" in one row */
+.period__inputs { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); flex-wrap: nowrap; gap: 6px; }
+.period__input { width: 100%; min-width: 0; font-size: 0.85rem; padding: 2px 4px; }
+.period__quick { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.period__last, .period__lastnum { min-height: 36px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); padding: 2px 10px; font: inherit; font-size: 0.85rem; color: var(--text); }
+.period__last--on { border-color: var(--accent); background: rgba(var(--accent-rgb), 0.1); font-weight: 700; }
+.period__lastnum { width: 80px; border-radius: var(--radius-sm); }
+.period__lastnum[hidden] { display: none; }
+/* total and average rows stand apart from the months */
+.year-table__gap td { height: 6px; padding: 0; border: none; }
+.year-table__sum th { background: rgba(var(--accent-rgb), 0.1); border-top: 2px solid var(--accent); border-bottom: 2px solid var(--accent); padding-top: 7px; padding-bottom: 7px; }
+.year-table__avg td { background: var(--surface-2); border-top: 1px dashed var(--border); border-bottom: 1px dashed var(--border); font-style: italic; }
+.rate-btn { min-width: 44px; white-space: nowrap; }

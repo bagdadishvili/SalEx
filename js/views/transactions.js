@@ -4,7 +4,7 @@ import { getState, updateState, ensureMonth, todayISO, FREE_BUCKET_ID } from '..
 import { generateMonthTransactions, monthNeedsGeneration, monthIsPrepared, initMonth, addTemplateToMonth } from '../monthEngine.js';
 import { openPrepareWizard, preparationPreview } from '../prepare.js';
 import { monthLabelFull } from '../monthNav.js';
-import { txnAmountEur, txnPlannedEur, txnPaidEur, topIdOf, resolveTopCategory, formatMoney, parseAmountInput, isEnvelope, envelopeSpent, ACCOUNT_LABELS } from '../calc.js';
+import { txnAmountEur, txnPlannedEur, txnPaidEur, topIdOf, resolveTopCategory, formatMoney, parseAmountInput, isEnvelope, envelopeSpent, envelopeUsed, ACCOUNT_LABELS } from '../calc.js';
 import { openEnvelopeDialog } from '../envelope.js';
 import { t, tx, personName } from '../texts.js';
 import { fetchEurGelRate } from '../rates.js';
@@ -202,7 +202,7 @@ function txnRow(txn, month, categories, refresh) {
   const amountEur = txnAmountEur(txn, month.exchangeRate);
   let amount;
   if (envelope) {
-    const spent = envelopeSpent(txn);
+    const spent = envelopeUsed(txn, month.transactions, month.exchangeRate); // incl. extras bought with it
     const left = (txn.amountPlanned || 0) - spent;
     amount = el('div', { class: 'row__amount tabular-nums' }, [
       el('div', { text: `${formatMoney(spent, txn.currency, 0)} / ${formatMoney(txn.amountPlanned, txn.currency, 0)}` }),

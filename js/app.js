@@ -5,7 +5,7 @@ import { confirmDialog } from './ui.js';
 import { runSelfChecks } from './calc.js';
 import { saveSnapshotIfDue } from './backup.js';
 import * as sync from './sync.js';
-import { toast, openModal, el } from './ui.js';
+import { toast, openModal, el, whenHistorySettled } from './ui.js';
 import { t, installTextEditing, onTextEditMode, setTextEditMode, defaultText } from './texts.js';
 import { renderAdmin } from './views/admin.js';
 import { renderDashboard } from './views/dashboard.js';
@@ -33,11 +33,14 @@ function currentRouteFromHash() {
 
 export function navigate(route) {
   if (!routes[route]) route = 'dashboard';
-  if (location.hash !== `#${route}`) {
-    location.hash = `#${route}`;
-    return; // hashchange listener will render
-  }
-  render(route);
+  // A dialog that was just closed is still stepping back in history — change the page after that.
+  whenHistorySettled(() => {
+    if (location.hash !== `#${route}`) {
+      location.hash = `#${route}`;
+      return; // hashchange listener will render
+    }
+    render(route);
+  });
 }
 
 /** Applies the user's own texts to the fixed parts of the page (title, tab bar). */
@@ -341,7 +344,7 @@ function askNewText(key, current, def) {
 }
 
 /** Shown in Settings; bump together with CACHE_VERSION in sw.js. */
-export const APP_VERSION = '15';
+export const APP_VERSION = '16';
 
 export { applyAppearance, checkBackupReminder };
 

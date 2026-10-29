@@ -37,6 +37,33 @@ export function savedToast() {
   toast('შენახულია ✓', 'ok');
 }
 
+// ---- Phone "back" closes the open dialog (not the page behind it) ----
+// Each dialog adds a history entry; "back" pops it and closes the top dialog. A dialog closed
+// by its own buttons removes its entry again (history.back), so no "empty" back press is left.
+const openDialogs = [];
+let skipPops = 0;
+let afterPop = [];
+
+function flushAfterPop() {
+  const fns = afterPop; afterPop = [];
+  fns.forEach(fn => { try { fn(); } catch (e) { console.error(e); } });
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('popstate', () => {
+    if (skipPops > 0) { skipPops--; if (!skipPops) flushAfterPop(); return; }
+    const top = openDialogs[openDialogs.length - 1];
+    if (top) top(true);
+  });
+}
+
+/** Runs fn once a pending dialog "back" has finished (so a page change is not undone by it). */
+export function whenHistorySettled(fn) {
+  if (!skipPops) { fn(); return; }
+  afterPop.push(fn);
+  setTimeout(() => { if (skipPops) { skipPops = 0; flushAfterPop(); } }, 400);
+}
+
 /** Renders a modal with custom body content (HTMLElement) and returns a close() function. */
 export function openModal(bodyEl, { title = '', onClose } = {}) {
   const root = document.getElementById('modal-root');
@@ -58,13 +85,19 @@ export function openModal(bodyEl, { title = '', onClose } = {}) {
   root.appendChild(overlay);
 
   let closed = false;
-  function close() {
+  let pushed = false;
+  try { history.pushState({ fbDialog: true }, ''); pushed = true; } catch { /* no history API */ }
+  function close(fromBack = false) {
     if (closed) return;
     closed = true;
+    const i = openDialogs.indexOf(close);
+    if (i >= 0) openDialogs.splice(i, 1);
     document.removeEventListener('keydown', escHandler);
     overlay.remove();
+    if (fromBack !== true && pushed && history.state && history.state.fbDialog) { skipPops++; history.back(); }
     if (onClose) onClose();
   }
+  openDialogs.push(close);
 
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) close();

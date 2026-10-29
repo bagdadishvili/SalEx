@@ -3,11 +3,15 @@
 // no need to enter every receipt.
 
 import { getState, updateState, todayISO } from './state.js';
-import { envelopeSpent, formatMoney, parseAmountInput } from './calc.js';
+import { envelopeSpent, envelopeExtras, formatMoney, parseAmountInput } from './calc.js';
 import { el, openModal, toast, formatDate } from './ui.js';
 
 function uid(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function findMonth(s, id) {
+  return Object.values(s.months).find(m => m.transactions.some(x => x.id === id)) || null;
 }
 
 function findTxn(s, id) {
@@ -22,7 +26,10 @@ export function openEnvelopeDialog(txnId, onDone = () => {}) {
   const txn = findTxn(getState(), txnId);
   if (!txn) return;
   const cur = txn.currency;
-  const spent = envelopeSpent(txn);
+  const month = findMonth(getState(), txnId);
+  // extras (🧺) bought with this money count as spent too
+  const extras = month ? envelopeExtras(txn, month.transactions, month.exchangeRate) : 0;
+  const spent = envelopeSpent(txn) + extras;
   const left = (txn.amountPlanned || 0) - spent;
 
   const form = el('form', { class: 'envelope-form' });

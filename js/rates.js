@@ -26,14 +26,34 @@ async function getJson(url) {
   return res.json();
 }
 
-/** Bank of Georgia rates from rates.json: { buy, sell, official, fetchedAt, stale }. */
-export async function fetchBankRates() {
-  const data = await getJson(ratesUrl());
+function parseRates(data) {
   const buy = Number(data.buy), sell = Number(data.sell);
   if (!(buy > 1 && buy < 10)) throw new Error('rates.json: bad buy rate');
   const fetchedAt = String(data.fetchedAt || '');
   const ageH = fetchedAt ? (Date.now() - new Date(fetchedAt).getTime()) / 3600000 : Infinity;
   return { buy, sell: sell > 0 ? sell : null, official: Number(data.official) || null, fetchedAt, stale: ageH > STALE_HOURS };
+}
+
+/** Bank of Georgia rates from rates.json: { buy, sell, official, fetchedAt, stale }. */
+export async function fetchBankRates() {
+  return parseRates(await getJson(ratesUrl()));
+}
+
+/**
+ * The same file read through the GitHub API — never served from the 5-minute CDN cache of
+ * raw.githubusercontent.com (that cache hid the fresh rate while "⏳" was waiting, v16).
+ */
+async function fetchBankRatesUncached(token = getRatesToken()) {
+  const { owner, repo } = repoParts();
+  const url = `https://api.github.com/repos/${owner}/${repo}/contents/rates.json?ref=rates&t=${Date.now()}`;
+  const headers = { Accept: 'application/vnd.github.raw+json' };
+  let res = await fetch(url, { cache: 'no-store', headers: token ? { ...headers, Authorization: `token ${token}` } : headers });
+  if (token && (res.status === 401 || res.status === 403 || res.status === 404)) res = await fetch(url, { cache: 'no-store', headers });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const body = await res.json();
+  // Without the "raw" media type GitHub wraps the file in base64.
+  if (body && typeof body.content === 'string' && body.encoding === 'base64') return parseRates(JSON.parse(atob(body.content.replace(/s/g, ''))));
+  return parseRates(body);
 }
 
 async function fromNbg() {
@@ -110,16 +130,16 @@ export async function triggerRatesUpdate(token = getRatesToken()) {
 }
 
 /** Starts the Action and waits until rates.json is newer than `since`. Resolves the fresh rate or null. */
-export async function fetchFreshRateNow({ timeoutMs = 120000, onWait } = {}) {
+export async function fetchFreshRateNow({ timeoutMs = 180000, onWait } = {}) {
   const since = Date.now() - 60000;
   const ok = await triggerRatesUpdate();
   if (!ok) return null;
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    await new Promise(r => setTimeout(r, 8000));
+    await new Promise(r => setTimeout(r, 6000));
     if (onWait) onWait(Math.round((Date.now() - started) / 1000));
     try {
-      const r = await fetchBankRates();
+      const r = await fetchBankRatesUncached();
       if (r.fetchedAt && new Date(r.fetchedAt).getTime() > since) {
         return { rate: r.buy, sell: r.sell, at: r.fetchedAt, kind: 'bog', source: 'საქართველოს ბანკი (ყიდვა)', stale: false };
       }

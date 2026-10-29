@@ -41,7 +41,7 @@ function seedState() {
       theme: 'light',
       accentColor: '#2563eb',
       fontScale: 'medium',
-      dashboardCardOrder: ['summary', 'due', 'envelopes', 'income', 'rate', 'georgia', 'cat_essentials', 'cat_savings', 'free', 'split', 'planVsActual', 'year'],
+      dashboardCardOrder: ['summary', 'due', 'envelopes', 'income', 'rate', 'georgia', 'cat_essentials', 'cat_savings', 'free', 'split', 'year'],
       // How the two salaries fund the shared costs: 'proportional' (same % of each salary) or 'equal' (50/50).
       contributionSplit: 'proportional',
       // 'actual' = transfer exactly the planned bills; 'plan' = transfer the category % of income.
