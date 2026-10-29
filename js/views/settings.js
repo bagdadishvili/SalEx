@@ -6,7 +6,7 @@ import { el, confirmDialog, toast, openModal } from '../ui.js';
 import { listSnapshots, getSnapshotData, saveSnapshot, summarizeState, SNAPSHOT_REASONS, markSnapshotShared, deleteSnapshot } from '../backup.js';
 import { exportJson, importJson, exportCsv, importCsv } from '../exporter.js';
 import { applyAppearance, checkBackupReminder, APP_VERSION, navigate } from '../app.js';
-import { monthKey } from '../state.js';
+import { budgetMonthKey } from '../state.js';
 import { setSelectedMonth, monthLabelFull } from '../monthNav.js';
 import { undoToast } from '../ui.js';
 import { shareJsonBackup, canShareFiles } from '../exporter.js';
@@ -17,8 +17,8 @@ import { t } from '../texts.js';
 
 const CARD_LABELS = {
   summary: 'თვის მიმოხილვა', income: 'შემოსავალი', rate: 'კურსი', georgia: 'საქართველოში გადასარიცხი',
-  free: 'თავისუფალი თანხა', year: 'წლიური მიმოხილვა',
-  due: 'ჯერ გადასახდელი', envelopes: 'ყოველდღიური ბიუჯეტები (კვება, საწვავი)', split: 'ხელფასის განაწილება', extras: 'დამატებითი ხარჯები'
+  savings: 'დანაზოგები', year: 'მიმოხილვა პერიოდით',
+  due: 'ამ თვეში გადასახდელი (დარჩენილი)', envelopes: 'ხარჯები (კვება, საწვავი)', split: 'ხელფასის განაწილება', extras: 'დამატებითი ხარჯები'
 };
 
 function summaryText(sum) {
@@ -43,13 +43,6 @@ export function renderSettings(root) {
   const adminBtn = el('button', { class: 'btn btn--primary', type: 'button', text: '🛠 ადმინი — ტექსტების და სახელების შეცვლა' });
   adminBtn.addEventListener('click', () => navigate('admin'));
   container.appendChild(el('div', { class: 'btn-row' }, [adminBtn]));
-  const planLink = el('button', { class: 'btn btn--secondary', type: 'button', text: '📊 პროცენტები / თანხები — „კატეგორიები" გვერდზე' });
-  planLink.addEventListener('click', () => navigate('categories'));
-  container.appendChild(el('div', { class: 'card' }, [
-    el('div', { class: 'card__title', text: 'გეგმა' }),
-    el('p', { class: 'card__sub', text: 'ყველა კატეგორიის და თავისუფალი თანხის მიზანი (პროცენტით ან €-ით) ახლა ერთ ადგილასაა — „კატეგორიები" გვერდის თავში.' }),
-    el('div', { class: 'btn-row' }, [planLink])
-  ]));
   container.appendChild(renderSplitSettings());
   container.appendChild(renderAppearance());
   container.appendChild(renderSync());
@@ -163,6 +156,20 @@ function renderSplitSettings() {
     toast('შენახულია ✓');
   });
   card.appendChild(el('div', { class: 'field' }, [el('label', { text: 'ახალი თვე როგორ შეივსოს' }), modeNew]));
+
+  // From the salary day on, spending counts for NEXT month (salary of 27 Oct pays November).
+  const salaryDay = el('input', { type: 'number', inputmode: 'numeric', min: '0', max: '31', value: String(state.settings.salaryDay ?? 27), style: 'max-width:90px' });
+  salaryDay.addEventListener('change', () => {
+    const v = Math.round(Number(salaryDay.value));
+    if (!(v >= 0 && v <= 31)) { toast('ჩაწერე რიცხვი 1-დან 31-მდე (0 = გამორთული)', 'error'); return; }
+    updateState(d => { d.settings.salaryDay = v; return d; });
+    toast('შენახულია ✓');
+  });
+  card.appendChild(el('div', { class: 'field' }, [
+    el('label', { text: '💶 ხელფასის ჩარიცხვის დღე' }),
+    salaryDay,
+    el('div', { class: 'card__sub', text: 'ამ დღიდან ყველა ხარჯი შემდეგი თვის ბიუჯეტშია: დეშბორდი, „დღეს" ღილაკი, „შემდეგი თვის მომზადება" და „ამ თვეშიც დაემატოს" შემდეგ თვეს აჩვენებს. 0 = ჩვეულებრივი კალენდარული თვე.' })
+  ]));
 
   const autoBox = el('input', { type: 'checkbox' });
   autoBox.checked = state.settings.rateAuto !== false;
@@ -459,7 +466,7 @@ function renderMonths() {
   const draw = () => {
     list.innerHTML = '';
     const months = getState().months;
-    const cur = monthKey();
+    const cur = budgetMonthKey();
     Object.keys(months).sort().reverse().forEach(k => {
       const m = months[k];
       const paid = m.transactions.filter(tr => tr.paid).length;
@@ -522,7 +529,7 @@ function renderRestore() {
   card.appendChild(el('h3', { class: 'subsection-title', text: 'ამ მოწყობილობაზე შენახული ასლები' }));
   const localList = el('div', { class: 'restore-list' });
   card.appendChild(localList);
-  const snapBtn = el('button', { class: 'btn btn--secondary btn--sm', text: '📦 ასლის შექმნა ახლა' });
+  const snapBtn = el('button', { class: 'btn btn--secondary btn--sm', text: '📦 ასლის შექმნა' });
   snapBtn.addEventListener('click', async () => {
     const saved = await saveSnapshot(getState(), 'manual');
     toast(saved ? 'ასლი შეიქმნა ✓' : 'ცვლილება არ ყოფილა — ბოლო ასლი უკვე იგივეა');
@@ -587,11 +594,11 @@ function renderRestore() {
 
   // Cloud history
   card.appendChild(el('h3', { class: 'subsection-title', text: 'ღრუბლის ისტორია (Gist-ის ვერსიები)' }));
-  const cloudInfo = el('div', { class: 'card__sub', text: 'აქ ჩანს ღრუბელში ატვირთული ყველა ძველი ვერსია. თუ მონაცემები სადმე დაიკარგა, აქ შეგიძლია იპოვო ბოლო ვერსია, სადაც ყველაფერი იყო.' });
+  const cloudInfo = el('div', { class: 'card__sub', text: 'ღრუბელი (Gist) ინახავს ყოველ ატვირთულ ვერსიას. ქვემოთ ღილაკი ჩამოტვირთავს ამ ვერსიების სიას (თარიღი, რამდენი ჩანაწერია) — მერე თავად ირჩევ, რომელი აღადგინო. აპი თავისით არაფერს აღადგენს.' });
   card.appendChild(cloudInfo);
   const cloudList = el('div', { class: 'restore-list' });
   card.appendChild(cloudList);
-  const loadCloudBtn = el('button', { class: 'btn btn--secondary btn--sm', text: '☁️ ღრუბლის ისტორიის ჩატვირთვა' });
+  const loadCloudBtn = el('button', { class: 'btn btn--secondary btn--sm', text: '☁️ ღრუბლის ვერსიების სიის ნახვა' });
   card.appendChild(el('div', { class: 'btn-row' }, [loadCloudBtn]));
 
   let page = 0;
@@ -639,7 +646,7 @@ function renderRestore() {
     } catch (e) {
       page -= 1;
       toast('შეცდომა: ' + e.message, 'error');
-      loadCloudBtn.textContent = '☁️ ღრუბლის ისტორიის ჩატვირთვა';
+      loadCloudBtn.textContent = '☁️ ღრუბლის ვერსიების სიის ნახვა';
     } finally {
       loadCloudBtn.disabled = false;
     }

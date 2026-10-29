@@ -21,13 +21,13 @@ export const TEXT_GROUPS = [
   }],
   ['cards', '🧩 დეშბორდის ბარათები', {
     'card.summary': 'თვის მიმოხილვა',
-    'card.due': '⏳ ამ თვეში ჯერ გადასახდელი',
-    'card.envelopes': '🛒 ყოველდღიური ბიუჯეტები',
+    'card.due': '⏳ ამ თვეში გადასახდელი (დარჩენილი)',
+    'card.envelopes': '🛒 ხარჯები (კვება, საწვავი)',
     'card.extras': '🧺 დამატებითი ხარჯები',
     'card.income': 'შემოსავალი',
     'card.rate': 'კურსი (1 € = ? ₾)',
     'card.georgia': 'საქართველოში გადასარიცხი',
-    'card.free': 'თავისუფალი თანხა',
+    'card.savings': '💰 დანაზოგები',
     'card.split': '💸 ვინ რამდენი გადარიცხოს (50/50)',
     'card.year': 'მიმოხილვა პერიოდით'
   }],
@@ -38,8 +38,7 @@ export const TEXT_GROUPS = [
     'summary.income': 'შემოსავალი',
     'summary.costs': 'ხარჯები',
     'summary.savings': 'დანაზოგი',
-    'summary.free': 'თავისუფალი',
-    'free.total': 'სულ თავისუფალი'
+    'summary.free': 'თავისუფალი'
   }],
   ['split', '💸 გადარიცხვების ცხრილი', {
     'split.tabKeep': 'ჩამოსაჭრელს ანგარიშზე ვიტოვებთ',
@@ -53,7 +52,7 @@ export const TEXT_GROUPS = [
   }],
   ['buttons', '🔘 ღილაკები და ფილტრები', {
     'btn.newExpense': '+ ახალი ხარჯი',
-    'btn.prepare': '📅 თვის მომზადება',
+    'btn.prepare': '📅 შემდეგი თვის მომზადება',
     'btn.newTemplate': '+ ახალი შაბლონი',
     'btn.pay': 'გადახდა',
     'btn.paid': '✓ გადახდილია',
@@ -83,13 +82,57 @@ export function defaultText(key) {
 }
 
 export function setText(key, value) {
+  const def = key.startsWith(RAW) ? key.slice(RAW.length) : DEFAULTS[key];
   updateState(d => {
     d.settings.texts = { ...(d.settings.texts || {}) };
     const v = String(value || '').trim();
-    if (!v || v === DEFAULTS[key]) delete d.settings.texts[key];
-    else d.settings.texts[key] = v.slice(0, 80);
+    if (!v || v === def) delete d.settings.texts[key];
+    else d.settings.texts[key] = v.slice(0, key.startsWith(RAW) ? 300 : 80);
     return d;
   });
+}
+
+// ---------------- Any other text on the screen (v17) ----------------
+// Buttons, hints, labels… everything made with el() can be renamed by tapping it in
+// "✎ edit texts" mode. Stored by its original wording: settings.texts['~<original>'] = new
+// text — synced like the named texts above (each text merges on its own).
+
+export const RAW = '~';
+
+let namesOf = null;
+let names = new Set();
+/** The family's own data (expense, template, category and people names) is never "UI text". */
+function isDataName(s) {
+  const st = getState();
+  if (!st) return false;
+  if (namesOf !== st) {
+    namesOf = st;
+    names = new Set([
+      ...(st.templates || []).map(x => x.name),
+      ...(st.categories || []).map(x => x.name),
+      ...Object.values(st.months || {}).flatMap(m => (m.transactions || []).map(x => x.name)),
+      ...['giorgi', 'nino', 'shared'].map(p => personName(p))
+    ]);
+  }
+  return names.has(s);
+}
+
+/** Can this on-screen text be renamed (a word or sentence, not a number or the family's data)? */
+export function isRenameable(s) {
+  return typeof s === 'string' && s.length >= 2 && s.length <= 300 && /[\u10D0-\u10FFA-Za-z]/.test(s) && !/\d/.test(s) && !isDataName(s);
+}
+
+/** Text resolver for el(): the family's own wording for an original text, if they set one. */
+export function resolveText(original) {
+  if (!isRenameable(original)) return { text: original, renameable: false };
+  const custom = getState()?.settings?.texts?.[RAW + original];
+  return { text: typeof custom === 'string' && custom.trim() ? custom : original, renameable: true };
+}
+
+/** Renamed free texts: [original, new] pairs (admin page). */
+export function rawOverrides() {
+  const texts = getState()?.settings?.texts || {};
+  return Object.keys(texts).filter(k => k.startsWith(RAW)).map(k => [k.slice(RAW.length), texts[k]]);
 }
 
 // ---------------- "✎ edit texts" mode ----------------
@@ -114,12 +157,14 @@ export function installTextEditing(ask, afterSave) {
   if (typeof document === 'undefined') return;
   document.addEventListener('click', async (e) => {
     if (!editMode) return;
-    const target = e.target.closest && e.target.closest('[data-tkey]');
-    if (!target) return;
+    const target = e.target.closest && e.target.closest('[data-tkey], [data-rtext]');
+    if (!target || target.closest('[data-noedit]')) return;
     e.preventDefault();
     e.stopPropagation();
-    const key = target.getAttribute('data-tkey');
-    const value = await ask(key, t(key), defaultText(key));
+    const named = target.getAttribute('data-tkey');
+    const key = named || RAW + target.getAttribute('data-rtext');
+    const original = named ? defaultText(named) : key.slice(RAW.length);
+    const value = await ask(key, named ? t(named) : resolveText(original).text, original);
     if (value === null) return;
     setText(key, value);
     afterSave();
@@ -129,4 +174,30 @@ export function installTextEditing(ask, afterSave) {
 /** Person / account display names (editable). */
 export function personName(account) {
   return t(`person.${['giorgi', 'nino'].includes(account) ? account : 'shared'}`);
+}
+
+/** Icon per person: Nino 👩, Giorgi 👨, both 👥. */
+export function personIcon(account) {
+  return account === 'nino' ? '👩' : account === 'giorgi' ? '👨' : '👥';
+}
+
+/** "👩 ნინო" — icon and name never split over two lines. */
+export function personTag(account) {
+  return `${personIcon(account)}\u00A0${personName(account)}`;
+}
+
+/** Georgian genitive of a name: კვება → კვების, საწვავი → საწვავის ("კვების ფულიდან"). */
+export function genitive(name) {
+  const s = String(name || '').trim();
+  if (/[აი]$/.test(s)) return s.slice(0, -1) + 'ის';
+  if (/[ეოუ]$/.test(s)) return s + 'ს';
+  return s + 'ის';
+}
+
+/** Georgian dative of a name: კვება → კვებას, საწვავი → საწვავს ("კვებას დააკლდა"). */
+export function dative(name) {
+  const s = String(name || '').trim();
+  if (/ი$/.test(s)) return s.slice(0, -1) + 'ს';
+  if (/[აეოუ]$/.test(s)) return s + 'ს';
+  return s + 'ს';
 }

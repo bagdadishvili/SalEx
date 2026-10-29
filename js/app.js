@@ -5,8 +5,8 @@ import { confirmDialog } from './ui.js';
 import { runSelfChecks } from './calc.js';
 import { saveSnapshotIfDue } from './backup.js';
 import * as sync from './sync.js';
-import { toast, openModal, el, whenHistorySettled } from './ui.js';
-import { t, installTextEditing, onTextEditMode, setTextEditMode, defaultText } from './texts.js';
+import { toast, openModal, el, whenHistorySettled, setTextResolver } from './ui.js';
+import { t, installTextEditing, onTextEditMode, setTextEditMode, defaultText, resolveText } from './texts.js';
 import { renderAdmin } from './views/admin.js';
 import { renderDashboard } from './views/dashboard.js';
 import { renderTransactions } from './views/transactions.js';
@@ -145,13 +145,13 @@ function renderSyncUi(status) {
   const banner = document.getElementById('sync-banner');
   if (dot) {
     const map = {
-      off: ['', ''], ok: ['ok', 'სინქრონიზებულია'], syncing: ['busy', 'სინქრონიზაცია...'],
+      off: ['none', 'სინქრონიზაცია ამ მოწყობილობაზე გამორთულია — ჩართვა: პარამეტრები → სინქრონიზაცია'], ok: ['ok', 'სინქრონიზებულია'], syncing: ['busy', 'სინქრონიზაცია...'],
       error: ['err', 'სინქრონიზაციის შეცდომა: ' + (status.message || '')], offline: ['off', 'ინტერნეტი არ არის — ცვლილებები მოგვიანებით აიტვირთება'],
       blocked: ['err', 'სინქრონიზაცია შეჩერებულია — საჭიროა შენი გადაწყვეტილება']
     };
     const [cls, title] = map[status.state] || ['', ''];
     dot.className = 'sync-dot' + (cls ? ` sync-dot--${cls}` : '');
-    dot.hidden = status.state === 'off';
+    dot.hidden = false; // grey = this device is not syncing (tap the dot to see why)
     dot.title = title;
     dot.setAttribute('aria-label', title);
   }
@@ -271,6 +271,7 @@ async function offerConnect({ token, gist }) {
 function init() {
   const connectLink = takeConnectLink();
   loadState();
+  setTextResolver(resolveText);
   applyAppearance();
   checkBackupReminder();
 
@@ -288,8 +289,8 @@ function init() {
 
   // "✎ edit texts" mode: tap any underlined text → rename it. A bar at the top ends the mode.
   installTextEditing(askNewText, rerender);
-  const editBar = el('div', { class: 'text-edit-bar', hidden: 'true' }, [
-    el('span', { text: '✎ რედაქტირების რეჟიმი — შეეხე ხაზგასმულ ტექსტს' }),
+  const editBar = el('div', { class: 'text-edit-bar', hidden: 'true', 'data-noedit': '' }, [
+    el('span', { text: '✎ რედაქტირების რეჟიმი — შეეხე ნებისმიერ მონიშნულ ტექსტს' }),
     el('button', { type: 'button', class: 'btn btn--primary btn--sm', text: 'დასრულება' })
   ]);
   editBar.querySelector('button').addEventListener('click', () => setTextEditMode(false));
@@ -320,14 +321,23 @@ function init() {
   if (!isPristine()) saveSnapshotIfDue(getState(), 'daily', 20);
 
   sync.onSyncStatus(renderSyncUi);
+  // Tap the dot: what the sync is doing and when it last worked (phones have no hover).
+  const dot = document.getElementById('sync-dot');
+  if (dot) {
+    dot.addEventListener('click', () => {
+      const c = sync.getSyncConfig();
+      const when = c.lastSyncedAt ? ` · ბოლო სინქრონიზაცია: ${new Date(c.lastSyncedAt).toLocaleString('ka-GE', { hour12: false })}` : '';
+      toast((dot.title || 'სინქრონიზაცია') + when, dot.classList.contains('sync-dot--ok') ? 'ok' : 'error');
+    });
+  }
   sync.initAutoSync();
   if (connectLink) setTimeout(() => offerConnect(connectLink), 300);
 }
 
 function askNewText(key, current, def) {
   return new Promise((resolve) => {
-    const input = el('input', { type: 'text', value: current, maxlength: '80' });
-    const form = el('form', {}, [
+    const input = el('input', { type: 'text', value: current, maxlength: key.startsWith('~') ? '300' : '80' });
+    const form = el('form', { 'data-noedit': '' }, [
       el('p', { class: 'card__sub', text: `საწყისი: „${def}"` }),
       el('div', { class: 'field' }, [el('label', { text: 'ახალი ტექსტი' }), input])
     ]);
@@ -344,7 +354,7 @@ function askNewText(key, current, def) {
 }
 
 /** Shown in Settings; bump together with CACHE_VERSION in sw.js. */
-export const APP_VERSION = '16';
+export const APP_VERSION = '17';
 
 export { applyAppearance, checkBackupReminder };
 

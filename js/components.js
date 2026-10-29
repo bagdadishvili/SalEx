@@ -2,9 +2,9 @@
 
 import { el, openModal } from './ui.js';
 import { getSelectedMonth, setSelectedMonth, shiftSelectedMonth, MONTH_NAMES_SHORT } from './monthNav.js';
-import { monthKey, FREE_BUCKET_ID } from './state.js';
+import { monthKey, budgetMonthKey, FREE_BUCKET_ID } from './state.js';
 import { resolveTopCategory } from './calc.js';
-import { personName } from './texts.js';
+import { personName, personTag } from './texts.js';
 
 const YEAR_RANGE_BACK = 3;
 const YEAR_RANGE_FWD = 4;
@@ -45,12 +45,12 @@ export function renderMonthNav(onChange) {
     }
     yearSelect.value = String(y);
     monthSelect.value = String(m);
-    today.hidden = getSelectedMonth() === monthKey();
+    today.hidden = getSelectedMonth() === budgetMonthKey();
   }
   syncFromSelected();
 
   today.addEventListener('click', () => {
-    setSelectedMonth(monthKey());
+    setSelectedMonth(budgetMonthKey());
     syncFromSelected();
     onChange(getSelectedMonth());
   });
@@ -137,9 +137,9 @@ export const PAYER_LABELS = {
   get nino() { return personName('nino'); }
 };
 
-/** "👤 გიორგი" — who pays (from whose bank account). */
+/** "👨 გიორგი" / "👩 ნინო" — who pays (from whose bank account). */
 export function payerChip(account) {
-  return el('span', { class: 'chip chip--account', title: 'ვინ იხდის (ვისი ანგარიშიდან)', text: `👤 ${PAYER_LABELS[account] || PAYER_LABELS.shared}` });
+  return el('span', { class: 'chip chip--account', title: 'ვინ იხდის (ვისი ანგარიშიდან)', text: personTag(account) });
 }
 
 export function georgiaChip() {
@@ -162,9 +162,9 @@ export function categoryChips(categories, categoryId) {
 
 /** Groups used by the templates list and the month preparation screen. */
 export const TEMPLATE_GROUPS = [
-  ['essentials', '🏠 აუცილებელი ხარჯები'],
+  ['essentials', '🏠 აუცილებელი გადასახადები'],
   ['georgia', '📤 საქართველოში გადასარიცხი'],
-  ['envelope', '🛒 ყოველდღიური ბიუჯეტები (ნელ-ნელა იხარჯება)'],
+  ['envelope', '🛒 ხარჯები (კვება, საწვავი — ნელ-ნელა იხარჯება)'],
   ['other', '📦 სხვა (დანაზოგი, თავისუფალი…)']
 ];
 

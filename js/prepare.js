@@ -9,6 +9,7 @@ import { computeSalarySplit, txnPlannedEur, formatMoney, parseAmountInput, ACCOU
 import { el, openModal, toast } from './ui.js';
 import { monthLabelFull, monthLabel, shiftMonthKey, setSelectedMonth } from './monthNav.js';
 import { fetchEurGelRate } from './rates.js';
+import { personTag } from './texts.js';
 import { TEMPLATE_GROUPS, PAYER_LABELS, groupOfTemplate } from './components.js';
 
 const CYCLE_TXT = { 2: '2 თვეში ერთხელ', 3: '3 თვეში ერთხელ', 6: '6 თვეში ერთხელ', 12: 'წელიწადში ერთხელ' };
@@ -132,7 +133,7 @@ export function openPrepareWizard(initialKey, onDone = () => {}) {
         const eurEl = el('span', { class: 'prep__eur tabular-nums' });
         r.eurEl = eurEl;
         const meta = [
-          el('span', { class: 'chip chip--account', text: `👤 ${ACC_SHORT[r.tpl.account || 'shared']}` }),
+          el('span', { class: 'chip chip--account', text: personTag(r.tpl.account || 'shared') }),
           r.tpl.toGeorgia ? el('span', { class: 'chip chip--georgia-flag', text: '📤' }) : null,
           r.tpl.cycleMonths > 1 && !r.tpl.oneTime ? el('span', { class: 'chip', text: `🔁 ${CYCLE_TXT[r.tpl.cycleMonths] || r.tpl.cycleMonths + ' თვეში ერთხელ'}` }) : null,
           r.tpl.oneTime ? el('span', { class: 'chip', text: 'ერთჯერადი' }) : null,

@@ -24,6 +24,26 @@ export function monthKey(date = new Date()) {
   return `${y}-${m}`;
 }
 
+/**
+ * The month whose budget is being spent today (v17). The salary that arrives on the salary
+ * day pays the NEXT month: from 27 Oct on, spending belongs to November. salaryDay 0 = off.
+ */
+export function budgetMonthKey(date = new Date()) {
+  const day = Number(state && state.settings && state.settings.salaryDay) || 0;
+  if (!(day > 0) || date.getDate() < day) return monthKey(date);
+  return monthKey(new Date(date.getFullYear(), date.getMonth() + 1, 1));
+}
+
+/** Days left for the budget month, today included: until the next salary (or the month's end). */
+export function daysLeftInBudget(date = new Date()) {
+  const day = Number(state && state.settings && state.settings.salaryDay) || 0;
+  const today = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  if (!(day > 0)) return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate() - date.getDate() + 1;
+  const [y, m] = budgetMonthKey(date).split('-').map(Number);
+  const pay = new Date(y, m - 1, Math.min(day, new Date(y, m, 0).getDate()));
+  return Math.max(1, Math.round((pay - today) / 86400000));
+}
+
 function todayISO() {
   const d = new Date();
   const y = d.getFullYear();
@@ -41,7 +61,7 @@ function seedState() {
       theme: 'light',
       accentColor: '#2563eb',
       fontScale: 'medium',
-      dashboardCardOrder: ['summary', 'due', 'envelopes', 'income', 'rate', 'georgia', 'cat_essentials', 'cat_savings', 'free', 'split', 'year'],
+      dashboardCardOrder: ['summary', 'due', 'envelopes', 'income', 'rate', 'georgia', 'savings', 'cat_essentials', 'split', 'year'],
       // How the two salaries fund the shared costs: 'proportional' (same % of each salary) or 'equal' (50/50).
       contributionSplit: 'proportional',
       // 'actual' = transfer exactly the planned bills; 'plan' = transfer the category % of income.
@@ -50,6 +70,7 @@ function seedState() {
       hiddenCards: [],          // dashboard blocks the user switched off
       texts: {},                // user's own names for cards/buttons/people (admin page)
       newMonthMode: 'wizard',   // 'wizard' = show the month-preparation screen; 'auto' = fill silently
+      salaryDay: 27,            // from this day on, spending belongs to next month's budget (0 = off)
       _u: EPOCH,
       planFree: {
         giorgi: { percent: 5, color: '#7c3aed' },
@@ -283,6 +304,7 @@ function migrate(raw) {
   if (!Array.isArray(raw.settings.hiddenCards)) raw.settings.hiddenCards = [];
   if (!['wizard', 'auto'].includes(raw.settings.newMonthMode)) raw.settings.newMonthMode = 'wizard';
   if (!raw.settings.texts || typeof raw.settings.texts !== 'object') raw.settings.texts = {};
+  if (typeof raw.settings.salaryDay !== 'number' || raw.settings.salaryDay < 0 || raw.settings.salaryDay > 31) raw.settings.salaryDay = 27;
   raw.categories = Array.isArray(raw.categories) && raw.categories.length ? raw.categories : seed.categories;
   raw.categories.forEach(c => {
     if (typeof c.percent !== 'number') c.percent = 0;

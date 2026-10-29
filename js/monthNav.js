@@ -2,7 +2,7 @@
 // The choice is remembered per device (separate key, never synced or exported), so the
 // app reopens on the month you looked at last.
 
-import { monthKey } from './state.js';
+import { monthKey, budgetMonthKey } from './state.js';
 
 const UI_KEY = 'familyBudget.ui.v1';
 const VALID_MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -24,7 +24,7 @@ function writeUi(partial) {
 
 function initialMonth() {
   const saved = readUi().selectedMonth;
-  return saved && VALID_MONTH.test(saved) ? saved : monthKey();
+  return saved && VALID_MONTH.test(saved) ? saved : budgetMonthKey();
 }
 
 /** Small per-device preferences (not synced): e.g. dismissed month-preparation cards. */

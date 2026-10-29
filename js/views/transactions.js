@@ -4,7 +4,7 @@ import { getState, updateState, ensureMonth, todayISO, FREE_BUCKET_ID } from '..
 import { generateMonthTransactions, monthNeedsGeneration, monthIsPrepared, initMonth, addTemplateToMonth } from '../monthEngine.js';
 import { openPrepareWizard, preparationPreview } from '../prepare.js';
 import { monthLabelFull } from '../monthNav.js';
-import { txnAmountEur, txnPlannedEur, txnPaidEur, topIdOf, resolveTopCategory, formatMoney, parseAmountInput, isEnvelope, envelopeSpent, envelopeUsed, ACCOUNT_LABELS } from '../calc.js';
+import { txnAmountEur, txnPlannedEur, txnPaidEur, topIdOf, resolveTopCategory, formatMoney, parseAmountInput, isEnvelope, isExtra, envelopeSpent, envelopeUsed, ACCOUNT_LABELS } from '../calc.js';
 import { openEnvelopeDialog } from '../envelope.js';
 import { t, tx, personName } from '../texts.js';
 import { fetchEurGelRate } from '../rates.js';
@@ -192,10 +192,13 @@ function txnRow(txn, month, categories, refresh) {
   const main = el('div', { class: 'row__main' }, [
     el('div', { class: 'row__name', text: txn.name }),
     el('div', { class: 'row__meta' }, [
-      ...categoryChips(categories, txn.categoryId),
+      // food/fuel and the extras bought with that money are "expenses", not bills of their category
+      ...(envelope ? [el('span', { class: 'chip', text: '🛒 ხარჯი' })]
+        : isExtra(txn) ? [el('span', { class: 'chip', text: '🧺 დამატებითი ხარჯი' })]
+        : categoryChips(categories, txn.categoryId)),
       txn.toGeorgia || category?.georgiaTransfer ? georgiaChip() : null,
       payerChip(txn.account),
-      envelope ? el('span', { class: 'chip', text: '🛒 ბიუჯეტი' }) : el('span', { text: formatDate(txn.dueDate) })
+      envelope ? null : el('span', { text: formatDate(txn.dueDate) })
     ])
   ]);
 
@@ -455,7 +458,7 @@ export function openTransactionForm(existing, monthKeyStr, onSaved, presets = {}
       el('div', { class: 'field' }, [el('label', { text: 'თანხა' }), amountInput]),
       el('div', { class: 'field' }, [el('label', { text: 'ვალუტა' }), currencySelect])
     ]),
-    el('div', { class: 'field' }, [el('label', { text: 'ვადა' }), dueDateInput]),
+    el('div', { class: 'field' }, [el('label', { text: 'გადახდის თარიღი' }), dueDateInput]),
     el('label', { class: 'field checkbox-field' }, [georgiaBox, el('span', { text: '📤 საქართველოში გადასარიცხი' })]),
     el('div', { class: 'field' }, [el('label', { text: 'ვინ იხდის (ვისი ანგარიშიდან)' }), accountSelect]),
     el('div', { class: 'field' }, [el('label', { text: 'შენიშვნა' }), noteInput]),

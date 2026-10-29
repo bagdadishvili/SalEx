@@ -6,6 +6,7 @@ import { getState, updateState, FREE_BUCKET_ID } from '../state.js';
 import { formatPercent, formatMoney, parseAmountInput, targetEur, targetPct, sumAllPercents, totalIncome } from '../calc.js';
 import { getSelectedMonth, monthLabel } from '../monthNav.js';
 import { el, openModal, confirmDialog, toast } from '../ui.js';
+import { personTag } from '../texts.js';
 import { pickColor, COLOR_PRESETS, freePseudoCategory, PAYER_LABELS } from '../components.js';
 
 function uid(prefix) {
@@ -36,7 +37,7 @@ export function renderCategories(root) {
 
   container.appendChild(el('p', {
     class: 'card__sub',
-    text: 'აქ შექმნილი კატეგორია ავტომატურად ჩნდება დეშბორდზე და პარამეტრებში. „მაქს. (ხარჯი)" — მიზანი შესრულებულია, თუ პროცენტზე მეტს არ ხარჯავ; „მინ. (დანაზოგი)" — თუ მინიმუმ ამდენს გადადებ.'
+    text: 'ახალი კატეგორია ავტომატურად ჩნდება დეშბორდზე. „მინ. (დანაზოგი)" კატეგორიები ერთ ბარათშია — „💰 დანაზოგები".'
   }));
 
   const planWrap = el('div', {});
@@ -81,7 +82,7 @@ export function renderCategories(root) {
         ]),
         el('div', { class: 'row__meta' }, [
           cat.parentId !== FREE_BUCKET_ID ? el('span', { class: 'chip', text: `${cat.targetType === 'amount' ? formatMoney(cat.amount, 'EUR', 0) : formatPercent(cat.percent)}${isTop ? ` · ${cat.goalType === 'min' ? 'მინ.' : 'მაქს.'}` : ''}` }) : null,
-          el('span', { class: 'chip chip--account', title: 'ვისია', text: `👤 ${PAYER_LABELS[cat.owner || 'shared']}` }),
+          el('span', { class: 'chip chip--account', title: 'ვისია', text: personTag(cat.owner || 'shared') }),
           pLabel ? el('span', { class: 'chip', text: pLabel }) : null,
           el('span', { text: String(count) + ' ჩანაწ.' })
         ])
@@ -268,10 +269,14 @@ function openCategoryForm(existing, onSaved) {
   // Whose is this category: both (shared 50/50) or one person's (e.g. "ინვესტიცია" = Nino's).
   const ownerSelect = el('select', {}, ['shared', 'giorgi', 'nino'].map(v => el('option', { value: v, text: v === 'shared' ? `${PAYER_LABELS.shared} (ორივესი, 50/50)` : PAYER_LABELS[v] })));
   ownerSelect.value = existing?.owner || 'shared';
+  // savings only: short- or long-term (shown apart in the 💰 card); empty = guessed from the name
+  const termSelect = el('select', {}, [['', 'სახელიდან (მოკლე… / გრძელ…)'], ['short', 'მოკლევადიანი'], ['long', 'გრძელვადიანი']].map(([v, l]) => el('option', { value: v, text: l })));
+  termSelect.value = existing?.term || '';
 
   form.append(
     el('div', { class: 'field' }, [el('label', { text: 'სახელი' }), nameInput]),
     el('div', { class: 'field' }, [el('label', { text: 'ვისია' }), ownerSelect]),
+    el('div', { class: 'field' }, [el('label', { text: 'დანაზოგის ვადა (მხოლოდ დანაზოგისთვის)' }), termSelect]),
     el('div', { class: 'field' }, [el('label', { text: 'სად ჩაითვალოს' }), parentSelect]),
     percentField,
     goalField,
@@ -299,14 +304,14 @@ function openCategoryForm(existing, onSaved) {
     updateState(draft => {
       if (isEdit) {
         const c = draft.categories.find(x => x.id === existing.id);
-        Object.assign(c, { name, parentId, percent, amount, targetType, goalType: goalSelect.value, color, georgiaTransfer: false, owner: ownerSelect.value });
+        Object.assign(c, { name, parentId, percent, amount, targetType, goalType: goalSelect.value, color, georgiaTransfer: false, owner: ownerSelect.value, term: termSelect.value || null });
         if (parentId) {
           // No longer a top-level block — drop from dashboard order.
           draft.settings.dashboardCardOrder = draft.settings.dashboardCardOrder.filter(k => k !== c.id);
         }
       } else {
         const id = uid('cat');
-        draft.categories.push({ id, name, parentId, percent, amount, targetType, goalType: goalSelect.value, color, georgiaTransfer: false, owner: ownerSelect.value });
+        draft.categories.push({ id, name, parentId, percent, amount, targetType, goalType: goalSelect.value, color, georgiaTransfer: false, owner: ownerSelect.value, term: termSelect.value || null });
       }
       return draft;
     });

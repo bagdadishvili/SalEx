@@ -77,7 +77,9 @@ export function openModal(bodyEl, { title = '', onClose } = {}) {
   if (title) {
     const h = document.createElement('h2');
     h.className = 'modal__title';
-    h.textContent = title;
+    const r = textResolver ? textResolver(title) : null;
+    h.textContent = r ? r.text : title;
+    if (r && r.renameable) h.setAttribute('data-rtext', title);
     modal.appendChild(h);
   }
   modal.appendChild(bodyEl);
@@ -141,11 +143,19 @@ export function confirmDialog(message, { confirmLabel = 'დიახ', cancelLa
   });
 }
 
+// Set by app.js: lets the family rename any text on screen (texts.js resolveText).
+let textResolver = null;
+export function setTextResolver(fn) { textResolver = fn; }
+
 export function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
   Object.entries(attrs).forEach(([k, v]) => {
     if (k === 'class') node.className = v;
-    else if (k === 'text') node.textContent = v;
+    else if (k === 'text') {
+      const r = textResolver && !('data-tkey' in attrs) && typeof v === 'string' ? textResolver(v) : null;
+      node.textContent = r ? r.text : v;
+      if (r && r.renameable) node.setAttribute('data-rtext', v);
+    }
     else if (k.startsWith('on') && typeof v === 'function') node.addEventListener(k.slice(2), v);
     else if (v !== null && v !== undefined) node.setAttribute(k, v);
   });

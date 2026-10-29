@@ -1,17 +1,18 @@
 // views/dashboard.js — compact dashboard cards, driven by the user's configured buckets.
 
-import { getState, updateState, monthKey } from '../state.js';
+import { getState, updateState, budgetMonthKey, daysLeftInBudget } from '../state.js';
 import { generateMonthTransactions, monthNeedsGeneration, monthIsPrepared, initMonth } from '../monthEngine.js';
 import { openPrepareWizard, preparationPreview } from '../prepare.js';
 import { monthLabel, monthLabelFull } from '../monthNav.js';
 import {
   computeDashboard, computeMonthOverview, computeRangeOverview, computeRemaining, computeSalarySplit,
   effectiveCardOrder, formatMoney, formatPercent, parseAmountInput, isEnvelope, envelopeSpent, envelopeExtras, envelopeUsed,
-  isGeorgia, isSavingsTxn, topIdOf, txnRemainingEur, txnPlannedEur, txnAmountEur, txnPaidEur, FREE_BUCKET_ID, targetEur, familyOf, isExtra
+  isGeorgia, isSavingsTxn, topIdOf, txnRemainingEur, txnPlannedEur, txnAmountEur, txnPaidEur, FREE_BUCKET_ID, targetEur, familyOf, isExtra,
+  computeSavingsOverview
 } from '../calc.js';
 import { openModal, undoToast } from '../ui.js';
 import { todayISO } from '../state.js';
-import { t, tx, personName } from '../texts.js';
+import { t, tx, personName, personTag, genitive, dative } from '../texts.js';
 import { payButton, openTransactionForm } from './transactions.js';
 import { el, savedToast, toast, formatDate } from '../ui.js';
 import { getSelectedMonth, setSelectedMonth, onMonthChange, MONTH_NAMES_SHORT, getUiPref, setUiPref } from '../monthNav.js';
@@ -43,7 +44,7 @@ function rateSourceFrom(r) {
 async function autoRefreshRate(key, rerender) {
   const s = getState();
   const m = s.months[key];
-  if (!s.settings.rateAuto || !m || key < monthKey()) return;
+  if (!s.settings.rateAuto || !m || key < budgetMonthKey()) return;
   if (m.rateSource && m.rateSource.kind === 'manual') return;
   if (Date.now() - lastAutoRateTry < AUTO_RATE_EVERY_MS) return;
   lastAutoRateTry = Date.now();
@@ -220,7 +221,7 @@ function attachDetails(card, id, ctx, filterFn, preset = null) {
     box.appendChild(el('div', { class: 'detail-row' + (tr.paid ? ' detail-row--paid' : '') }, [
       el('div', { class: 'detail-row__main' }, [
         el('div', { class: 'detail-row__name', text: tr.name }),
-        el('div', { class: 'detail-row__meta', text: `👤 ${PAYER_LABELS[tr.account] || PAYER_LABELS.shared}${tr.dueDate && !isEnvelope(tr) ? ` · ${formatDate(tr.dueDate).slice(0, 5)}` : ''}${envelopeInfo}` })
+        el('div', { class: 'detail-row__meta', text: `${personTag(tr.account)}${tr.dueDate && !isEnvelope(tr) ? ` · ${formatDate(tr.dueDate).slice(0, 5)}` : ''}${envelopeInfo}` })
       ]),
       el('div', { class: 'detail-row__amount tabular-nums' }, [
         el('div', { text: formatMoney(shown, cur) }),
@@ -253,7 +254,7 @@ function attachDetails(card, id, ctx, filterFn, preset = null) {
  */
 function summaryCard({ month, categories, settings }) {
   const o = computeMonthOverview(month, categories, settings);
-  const card = el('div', { class: 'card stat-card stat-card--wide' });
+  const card = el('div', { class: 'card stat-card stat-card--wide summary-card' });
   card.appendChild(el('div', { class: 'stat-card__label', ...tx('card.summary') }));
 
   const progressLine = (labelKey, done, planned, doneWord) => {
@@ -408,17 +409,18 @@ function georgiaCard(ctx) {
 }
 
 function categoryCard(b, ctx) {
-  const pct = b.planned > 0 ? Math.min(100, (b.actual / b.planned) * 100) : 0;
+  const { month, categories } = ctx;
   // Show "whose" only when the whole block (incl. sub-categories) belongs to one person.
-  const owners = new Set(familyOf(ctx.categories, b).map(c => c.owner || 'shared'));
+  const owners = new Set(familyOf(categories, b).map(c => c.owner || 'shared'));
   const only = owners.size === 1 ? [...owners][0] : null;
-  const owner = only && only !== 'shared' ? ` · 👤 ${personName(only)}` : (owners.size > 1 ? ` · 👤 ${[...owners].map(o => personName(o)).join(' + ')}` : '');
+  const owner = only && only !== 'shared' ? ` · ${personTag(only)}` : (owners.size > 1 ? ` · ${[...owners].map(o => personTag(o)).join(' + ')}` : '');
   const isSaving = b.goalType === 'min';
-  const sub = isSaving
-    ? `გადარიცხულია ${formatMoney(b.actual, 'EUR')} / ${formatMoney(b.planned, 'EUR')} · ${formatPercent(b.pct)} შემოსავლიდან${owner}`
-    : `გადახდილია: ${formatMoney(b.actual, 'EUR')} · ${formatPercent(b.pct)} შემოსავლიდან${b.target > 0 ? ` · გეგმა ${formatMoney(b.target, 'EUR', 0)} (${formatPercent(b.targetPercent)})` : ''}${owner}`;
+  if (!isSaving) return billsCategoryCard(b, ctx, owner);
+  const pct = b.planned > 0 ? Math.min(100, (b.actual / b.planned) * 100) : 0;
+  const sub = `გადარიცხულია ${formatMoney(b.actual, 'EUR')} / ${formatMoney(b.planned, 'EUR')} · ${formatPercent(b.pct)} შემოსავლიდან${owner}`;
   const card = statCard({ label: b.name, value: formatMoney(b.planned, 'EUR'), sub, pct, color: b.color });
-  if (isSaving && b.planned > 0.004) {
+  void month;
+  if (b.planned > 0.004) {
     const open = b.toTransfer > 0.5;
     if (open) {
       const status = el('div', { class: 'saving-status saving-status--open' }, [
@@ -433,6 +435,84 @@ function categoryCard(b, ctx) {
     }
   }
   return attachDetails(card, `cat:${b.id}`, ctx, (tr) => topIdOf(ctx.categories, tr.categoryId) === b.id, { categoryId: b.id });
+}
+
+/**
+ * A spending block (e.g. "აუცილებელი") shows its BILLS only: food/fuel budgets and the extras
+ * bought with them are in "🛒 ხარჯები" and "🧺" (v17). The plan line still compares the whole block.
+ */
+function billsCategoryCard(b, ctx, owner) {
+  const { month, categories } = ctx;
+  const rate = month.exchangeRate;
+  const T = (month.income?.giorgi || 0) + (month.income?.nino || 0);
+  const inBlock = (tr) => topIdOf(categories, tr.categoryId) === b.id;
+  const isBill = (tr) => inBlock(tr) && !isEnvelope(tr) && !isExtra(tr);
+  const bills = month.transactions.filter(isBill);
+  const planned = bills.reduce((s, tr) => s + txnPlannedEur(tr, rate), 0);
+  const paid = bills.reduce((s, tr) => s + txnPaidEur(tr, rate), 0);
+  const budgets = month.transactions.filter(tr => inBlock(tr) && isEnvelope(tr)).reduce((s, tr) => s + txnPlannedEur(tr, rate), 0);
+  const pct = planned > 0 ? Math.min(100, (paid / planned) * 100) : 0;
+  const share = T > 0 ? (planned / T) * 100 : 0;
+  let sub = `გადახდილია ${formatMoney(paid, 'EUR')} · ${formatPercent(share)} შემოსავლიდან${owner}`;
+  if (budgets > 0.004 || b.target > 0) {
+    sub += ` · კვება/საწვავით სულ ${formatMoney(b.planned, 'EUR', 0)}${b.target > 0 ? ` (გეგმა ${formatMoney(b.target, 'EUR', 0)}, ${formatPercent(b.targetPercent)})` : ''}`;
+  }
+  const card = statCard({ label: b.name, value: formatMoney(planned, 'EUR'), sub, pct, color: b.color });
+  if (bills.length && bills.every(tr => tr.paid)) markDone(card, 'ყველა გადასახადი გადახდილია');
+  return attachDetails(card, `cat:${b.id}`, ctx, isBill, { categoryId: b.id });
+}
+
+/**
+ * 💰 One card for all savings (v17): each saving (whose, short/long term) with plan and what is
+ * transferred, totals for short-term, long-term and all. Tap → the separate savings cards with
+ * "✓ გადავრიცხე" open below it; tap again → they fold away.
+ */
+function savingsCard(ctx) {
+  const { dash, categories, rerender } = ctx;
+  const blocks = dash.buckets.filter(b => b.goalType === 'min');
+  if (!blocks.length) return [];
+  const so = computeSavingsOverview(ctx.month, categories);
+  const open = expanded.has('savings');
+  const card = el('div', { class: 'card stat-card stat-card--wide savings-card card--expandable' });
+  card.appendChild(el('div', { class: 'stat-card__label', ...tx('card.savings') }));
+  card.appendChild(el('div', { class: 'stat-card__value tabular-nums', text: formatMoney(so.total.planned, 'EUR') }));
+  const m0 = (v) => formatMoney(v, 'EUR', 0);
+  const TERM = { short: 'მოკლევადიანი', long: 'გრძელვადიანი' };
+  const list = el('div', { class: 'savings-list' });
+  so.items.forEach(r => {
+    const done = r.open <= 0.5;
+    list.appendChild(el('div', { class: 'savings-item' + (done ? ' savings-item--done' : '') }, [
+      el('span', { class: 'savings-item__icon', text: done ? '✓' : '⏳' }),
+      el('div', { class: 'savings-item__main' }, [
+        el('div', { class: 'savings-item__name', text: r.name }),
+        el('div', { class: 'detail-row__meta', text: [personTag(r.owner), TERM[r.term]].filter(Boolean).join(' · ') })
+      ]),
+      el('div', { class: 'savings-item__amount tabular-nums', text: `${m0(r.done)} / ${m0(r.planned)}` })
+    ]));
+  });
+  card.appendChild(list);
+  const totals = el('table', { class: 'split-table savings-totals tabular-nums' });
+  totals.appendChild(el('thead', {}, [el('tr', {}, [el('th', { text: '' }), el('th', { text: 'გეგმა' }), el('th', { text: 'გადარიცხული' })])]));
+  const row = (label, x, cls = '') => el('tr', { class: cls }, [el('th', { scope: 'row', text: label }), el('td', { text: m0(x.planned) }), el('td', { text: m0(x.done) })]);
+  totals.appendChild(el('tbody', {}, [
+    so.short.planned > 0.004 ? row('მოკლევადიანი', so.short) : null,
+    so.long.planned > 0.004 ? row('გრძელვადიანი', so.long) : null,
+    row('სულ ორივემ', so.total, 'savings-totals__all')
+  ].filter(Boolean)));
+  card.appendChild(totals);
+  const toggle = () => { if (expanded.has('savings')) expanded.delete('savings'); else expanded.add('savings'); rerender(); };
+  const btn = el('button', { type: 'button', class: 'card-expand', 'aria-expanded': String(open), text: open ? '▲ დაკეცვა' : `▼ ${blocks.length} ბარათი — გადარიცხვა / რედაქტირება` });
+  btn.addEventListener('click', (e) => { e.stopPropagation(); toggle(); });
+  card.addEventListener('click', (e) => {
+    if (document.body.classList.contains('text-edit-mode')) return;
+    if (e.target.closest('button, input, select, a, label')) return;
+    toggle();
+  });
+  card.appendChild(btn);
+  if (so.items.length && so.items.every(r => r.open <= 0.5)) markDone(card, 'ყველაფერი გადარიცხულია');
+  if (!open) return card;
+  const subCards = blocks.map(b => { const c = categoryCard(b, ctx); c.classList.add('savings-sub'); return c; });
+  return [card, ...subCards];
 }
 
 /**
@@ -458,7 +538,7 @@ function openSavingsTransferDialog(b, ctx) {
   const inputs = rows.map(r => {
     const cb = el('input', { type: 'checkbox' }); cb.checked = true;
     const amt = el('input', { type: 'text', inputmode: 'decimal', class: 'prep__amount tabular-nums', value: r.missing.toFixed(2).replace('.', ',') });
-    form.appendChild(el('label', { class: 'prep__row' }, [cb, el('span', { class: 'prep__name', text: `${r.c.name}${r.c.owner && r.c.owner !== 'shared' ? ` · 👤 ${personName(r.c.owner)}` : ''}` }), el('span', { class: 'prep__money' }, [amt, el('span', { class: 'prep__cur', text: '€' })])]));
+    form.appendChild(el('label', { class: 'prep__row' }, [cb, el('span', { class: 'prep__name', text: `${r.c.name}${r.c.owner && r.c.owner !== 'shared' ? ` · ${personTag(r.c.owner)}` : ''}` }), el('span', { class: 'prep__money' }, [amt, el('span', { class: 'prep__cur', text: '€' })])]));
     return { r, cb, amt };
   });
   const save = el('button', { class: 'btn btn--primary', type: 'submit', text: '✓ ჩაწერა' });
@@ -511,43 +591,11 @@ function openSavingsTransferDialog(b, ctx) {
   });
 }
 
-function freeCard(ctx) {
-  const { dash, categories } = ctx;
-  const card = el('div', { class: 'card stat-card stat-card--wide' });
-  card.appendChild(el('div', { class: 'stat-card__label', ...tx('card.free') }));
-  // The total sits in its own framed box, clearly apart from the two personal amounts.
-  card.appendChild(el('div', { class: 'free-total tabular-nums' }, [
-    el('span', tx('free.total')),
-    el('strong', { text: formatMoney(dash.free.total, 'EUR') })
-  ]));
-  const split = el('div', { class: 'free-split' });
-  split.appendChild(freePersonBlock(personName('giorgi'), dash.free.giorgi));
-  split.appendChild(freePersonBlock(personName('nino'), dash.free.nino));
-  card.appendChild(split);
-  const other = categories.find(c => c.parentId === FREE_BUCKET_ID);
-  return attachDetails(card, 'free', ctx, (tr) => topIdOf(categories, tr.categoryId) === FREE_BUCKET_ID, { categoryId: other ? other.id : undefined });
-}
-
-function freePersonBlock(label, person) {
-  const spentPct = person.share > 0 ? Math.min(100, (person.spent / person.share) * 100) : (person.spent > 0 ? 100 : 0);
-  const over = person.remaining < -0.005;
-  const block = el('div', { class: 'free-split__person', style: `border-left:3px solid ${person.color}` }, [
-    el('div', { class: 'stat-card__sub', text: `${label} · ${formatPercent(person.pct)}` }),
-    el('div', { class: 'free-split__share tabular-nums', text: formatMoney(person.share, 'EUR') }),
-    el('div', {
-      class: 'stat-card__sub tabular-nums' + (over ? ' text-danger' : ''),
-      text: `დახარჯულია ${formatMoney(person.spent, 'EUR')} · დარჩა ${formatMoney(person.remaining, 'EUR')}`
-    })
-  ]);
-  block.appendChild(progressBar(spentPct, over ? 'var(--danger)' : person.color));
-  return block;
-}
-
 function yearCard({ state, key, goToMonth, rerender }) {
   // Period: remembered per device; default = the selected month's calendar year.
   const year = Number(key.slice(0, 4));
   const saved = getUiPref('overviewRange', null);
-  const cur = monthKey();
+  const cur = budgetMonthKey();
   // "last N months" is kept relative, so it moves on with the calendar.
   const lastN = saved && saved.last > 0 ? Math.min(240, Math.round(saved.last)) : 0;
   const from = lastN ? shiftKey(cur, 1 - lastN) : (saved && saved.from ? saved.from : `${year}-01`);
@@ -632,7 +680,7 @@ function yearCard({ state, key, goToMonth, rerender }) {
 function prepareCards(state, key, open, redraw) {
   const cards = [];
   if (!state.templates.length) return cards;
-  const cur = monthKey();
+  const cur = budgetMonthKey();
   const dismissed = new Set(getUiPref('dismissedPrepare', []));
   const make = (k, title, sub, primary) => {
     const btn = el('button', { class: 'btn ' + (primary ? 'btn--primary' : 'btn--secondary'), type: 'button', text: '📅 მომზადება' });
@@ -640,7 +688,7 @@ function prepareCards(state, key, open, redraw) {
     const closeBtn = el('button', { class: 'icon-btn icon-btn--sm prepare-card__close', type: 'button', 'aria-label': 'შეხსენების დამალვა ამ თვისთვის', title: 'დამალვა (ამ თვისთვის). სულ გამორთვა — პარამეტრებში', text: '✕' });
     closeBtn.addEventListener('click', () => {
       setUiPref('dismissedPrepare', [...dismissed, k].slice(-24));
-      toast('დაიმალა. „📅 თვის მომზადება" ისევ ხელმისაწვდომია „ტრანზაქციების" გვერდზე; სულ გამორთვა — პარამეტრებში.');
+      toast('დაიმალა. „📅 შემდეგი თვის მომზადება" ისევ ხელმისაწვდომია „შაბლონების" გვერდზე; სულ გამორთვა — პარამეტრებში.');
       redraw();
     });
     return el('div', { class: 'card stat-card stat-card--wide prepare-card' + (primary ? ' prepare-card--main' : '') }, [
@@ -679,7 +727,7 @@ function dueCard(ctx) {
   card.appendChild(el('div', { class: 'stat-card__sub tabular-nums', text: `${rem.next.length} გადასახადი გადასახდელია (დანაზოგი და კვება/საწვავი აქ არ ითვლება)` }));
   const acc = el('div', { class: 'due-card__accounts tabular-nums' });
   Object.entries(rem.billsByAccount).forEach(([a, v]) => {
-    if (v > 0.004) acc.appendChild(el('span', { class: 'chip', text: `👤 ${PAYER_LABELS[a]}: ${formatMoney(v, 'EUR', 0)}` }));
+    if (v > 0.004) acc.appendChild(el('span', { class: 'chip', text: `${personTag(a)}: ${formatMoney(v, 'EUR', 0)}` }));
   });
   card.appendChild(acc);
   const next = rem.next.slice(0, 2).map(t => `${t.name} ${formatDate(t.dueDate).slice(0, 5)}`).join(' · ');
@@ -704,9 +752,8 @@ function envelopesCard({ month, key, rerender }) {
     const pct = t.amountPlanned > 0 ? Math.min(100, (spent / t.amountPlanned) * 100) : 0;
     // How much per day is left until the end of the month (current month only).
     let perDay = '';
-    if (t.dailyHint !== false && key === monthKey() && !t.paid && left > 0.5) {
-      const now = new Date();
-      const daysLeft = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate() - now.getDate() + 1;
+    if (t.dailyHint !== false && key === budgetMonthKey() && !t.paid && left > 0.5) {
+      const daysLeft = daysLeftInBudget(); // until the next salary
       perDay = ` · დღეში ≈ ${formatMoney(left / daysLeft, t.currency, 0)}`;
     }
     const add = el('button', { class: 'icon-btn icon-btn--sm envelope-row__add', type: 'button', 'aria-label': `${t.name}: ხარჯის ან ნაშთის ჩაწერა`, text: '＋' });
@@ -795,7 +842,7 @@ function extrasCard(ctx) {
   const name = el('input', { type: 'text', class: 'extras__name', placeholder: 'რა (მაგ. ფეხსაცმელი)', maxlength: '60' });
   const amount = el('input', { type: 'text', inputmode: 'decimal', class: 'extras__amount tabular-nums', placeholder: '€' });
   const from = el('select', { class: 'extras__from', 'aria-label': 'საიდან გადავიხადეთ' }, [
-    ...envs.map(e => el('option', { value: e.id, text: `🛒 ${e.name}-ის ფულიდან` })),
+    ...envs.map(e => el('option', { value: e.id, text: `🛒 ${genitive(e.name)} ფულიდან` })),
     el('option', { value: '', text: 'ცალკე (არა ბიუჯეტიდან)' })
   ]);
   const food = envs.find(e => /კვებ/.test(e.name));
@@ -817,7 +864,7 @@ function extrasCard(ctx) {
       });
       return d;
     });
-    toast(`🧺 ${n} — ${formatMoney(v, 'EUR')} ✓${env ? ` (${env.name}-ს დააკლდა)` : ''}`);
+    toast(`🧺 ${n} — ${formatMoney(v, 'EUR')} ✓${env ? ` (${dative(env.name)} დააკლდა)` : ''}`);
     rerender();
   };
   add.addEventListener('click', (e) => { e.stopPropagation(); submit(); });
@@ -856,7 +903,7 @@ function extrasCard(ctx) {
     list.appendChild(el('div', { class: 'detail-row' }, [
       el('div', { class: 'detail-row__main' }, [
         el('div', { class: 'detail-row__name', text: x.name }),
-        el('div', { class: 'detail-row__meta', text: `${formatDate(x.paidAt || x.dueDate).slice(0, 5)}${env ? ` · ${env.name}-ის ფულიდან` : ' · ცალკე'}` })
+        el('div', { class: 'detail-row__meta', text: `${formatDate(x.paidAt || x.dueDate).slice(0, 5)}${env ? ` · ${genitive(env.name)} ფულიდან` : ' · ცალკე'}` })
       ]),
       el('div', { class: 'detail-row__amount tabular-nums', text: formatMoney(x.amountActual ?? x.amountPlanned, 'EUR') }),
       del
@@ -871,7 +918,7 @@ const CARD_RENDERERS = {
   income: incomeCard,
   rate: rateCard,
   georgia: georgiaCard,
-  free: freeCard,
+  savings: savingsCard,
   year: yearCard,
   due: dueCard,
   envelopes: envelopesCard,

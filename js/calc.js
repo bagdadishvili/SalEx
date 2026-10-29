@@ -151,11 +151,12 @@ function sumFreeByOwner(month, categories, owner, usePaidActual) {
  * The dashboard card order actually rendered: stored order, cleaned of stale ids,
  * with any new top-level categories inserted before the free-money card.
  */
-export const FIXED_CARDS = ['summary', 'due', 'envelopes', 'extras', 'income', 'rate', 'georgia', 'free', 'split', 'year'];
+export const FIXED_CARDS = ['summary', 'due', 'envelopes', 'extras', 'income', 'rate', 'georgia', 'savings', 'split', 'year'];
 
 export function effectiveCardOrder(settings, categories) {
   const fixed = FIXED_CARDS;
-  const topIds = categories.filter(c => !c.parentId).map(c => c.id);
+  // Savings blocks ("min" goal) live inside the one 💰 savings card (v17), not as cards of their own.
+  const topIds = categories.filter(c => !c.parentId && c.goalType !== 'min').map(c => c.id);
   const stored = Array.isArray(settings.dashboardCardOrder) ? settings.dashboardCardOrder : [];
   const order = stored.filter(k => fixed.includes(k) || topIds.includes(k));
   // Cards added in newer versions go next to their natural neighbour, not to the very end.
@@ -167,7 +168,7 @@ export function effectiveCardOrder(settings, categories) {
   });
   topIds.forEach(id => {
     if (!order.includes(id)) {
-      const i = order.indexOf('free');
+      const i = order.indexOf('split');
       order.splice(i >= 0 ? i : order.length, 0, id);
     }
   });
@@ -261,6 +262,35 @@ export function computeMonthTotals(month) {
 export const ACCOUNTS = ['shared', 'giorgi', 'nino'];
 // Who pays = from whose bank account the money leaves (also whose free money it reduces).
 export const ACCOUNT_LABELS = { shared: 'საერთო', giorgi: 'გიორგი', nino: 'ნინო' };
+
+/** Savings term of a category: 'short' | 'long' | '' — its own setting, else read from its name. */
+export function savingsTerm(c) {
+  if (!c) return '';
+  if (c.term === 'short' || c.term === 'long') return c.term;
+  if (/გრძელ/.test(c.name || '')) return 'long';
+  if (/მოკლე/.test(c.name || '')) return 'short';
+  return '';
+}
+
+/**
+ * The 💰 savings card (v17): every savings (sub)category with its plan for the month and what
+ * is already transferred, plus totals for short-term, long-term and all savings.
+ */
+export function computeSavingsOverview(month, categories) {
+  const T = totalIncome(month);
+  const rate = month.exchangeRate;
+  const items = categories.filter(c => {
+    const top = resolveTopCategory(categories, c.id);
+    return top && top.parentId !== FREE_BUCKET_ID && c.parentId !== FREE_BUCKET_ID && top.goalType === 'min';
+  }).map(c => {
+    const txns = month.transactions.filter(t => t.categoryId === c.id);
+    const planned = Math.max(targetEur(c, T), txns.reduce((s, t) => s + txnPlannedEur(t, rate), 0));
+    const done = txns.reduce((s, t) => s + txnPaidEur(t, rate), 0);
+    return { id: c.id, name: c.name, owner: c.owner || 'shared', term: savingsTerm(c), planned, done, open: Math.max(0, planned - done) };
+  }).filter(r => r.planned > 0.004 || r.done > 0.004);
+  const sum = (list) => ({ planned: list.reduce((s, r) => s + r.planned, 0), done: list.reduce((s, r) => s + r.done, 0) });
+  return { items, short: sum(items.filter(r => r.term === 'short')), long: sum(items.filter(r => r.term === 'long')), total: sum(items) };
+}
 
 /** Is this transaction money moved to savings (its top category has goal "min")? */
 export function isSavingsTxn(txn, categories) {
@@ -707,6 +737,12 @@ export function runSelfChecks() {
   assertClose('remaining total 1600 + 660', rem.total, 2260);
   assertClose('remaining giorgi account 400', rem.byAccount.giorgi, 400);
   assertEq('card order inserts due after summary', effectiveCardOrder({ dashboardCardOrder: ['summary', 'income'] }, categories).indexOf('due'), 1);
+  assertEq('savings blocks are inside the savings card, not cards of their own', effectiveCardOrder({ dashboardCardOrder: ['cat_savings', 'georgia'] }, categories).includes('cat_savings'), false);
+  const so = computeSavingsOverview({ exchangeRate: 3, income: { giorgi: 2000, nino: 2000 }, transactions: [] }, [
+    { id: 'sg', name: 'x (მოკლევადიანი)', targetType: 'amount', amount: 300, goalType: 'min', parentId: null, owner: 'giorgi' },
+    { id: 'sl', name: 'y', term: 'long', targetType: 'amount', amount: 200, goalType: 'min', parentId: 'sg', owner: 'nino' }
+  ]);
+  assertClose('savings card: short 300, long 200, total 500', so.short.planned * 1000 + so.long.planned + so.total.planned / 1000, 300 * 1000 + 200 + 0.5);
   assertEq('formatMoney negative', formatMoney(-12.5, 'EUR'), '-12,50 €');
 
   const passed = results.filter(r => r.pass).length;

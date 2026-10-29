@@ -4,12 +4,12 @@ import { getState, updateState, FREE_BUCKET_ID } from '../state.js';
 import { isTemplateDueInMonth, resolveTopCategory, gelToEur, formatMoney, parseAmountInput, ACCOUNT_LABELS } from '../calc.js';
 import { parseTemplatePack, addStarterTemplates } from '../starterPack.js';
 import { el, openModal, confirmDialog, toast, undoToast, formatDate } from '../ui.js';
-import { monthKey } from '../state.js';
+import { budgetMonthKey } from '../state.js';
 import { getSelectedMonth, setSelectedMonth, monthLabel, shiftMonthKey } from '../monthNav.js';
 import { openPrepareWizard } from '../prepare.js';
 import { monthIsPrepared, addTemplateToMonth } from '../monthEngine.js';
 import { navigate } from '../app.js';
-import { tx } from '../texts.js';
+import { tx, personTag } from '../texts.js';
 import { getUiPref, setUiPref } from '../monthNav.js';
 import { bucketChip, freePseudoCategory, payerChip, georgiaChip, categoryChips, TEMPLATE_GROUPS, groupOfTemplate, categoryOptions, PAYER_LABELS } from '../components.js';
 
@@ -35,7 +35,7 @@ function uid(prefix) {
 }
 
 function nextDueMonth(tpl) {
-  let cursor = monthKey();
+  let cursor = budgetMonthKey();
   for (let i = 0; i < 36; i++) {
     if (isTemplateDueInMonth(tpl, cursor)) return cursor;
     const [y, m] = cursor.split('-').map(Number);
@@ -55,7 +55,7 @@ export function renderTemplates(root) {
   // Visual month preparation: opens on the current month if it isn't prepared yet, else the next one.
   const nextBtn = el('button', { class: 'btn btn--secondary', ...tx('btn.prepare') });
   nextBtn.addEventListener('click', () => {
-    const cur = monthKey();
+    const cur = budgetMonthKey();
     const target = monthIsPrepared(getState(), cur) ? shiftMonthKey(cur, 1) : cur;
     openPrepareWizard(target, () => navigate('dashboard'));
   });
@@ -103,7 +103,7 @@ export function renderTemplates(root) {
   container.appendChild(el('div', { class: 'tpl-toolbar' }, [
     search,
     sel('group', [['all', 'ყველა ჯგუფი'], ...TEMPLATE_GROUPS.map(([k, title]) => [k, title])]),
-    sel('payer', [['all', '👤 ყველა'], ['shared', `👤 ${PAYER_LABELS.shared}`], ['giorgi', `👤 ${PAYER_LABELS.giorgi}`], ['nino', `👤 ${PAYER_LABELS.nino}`]]),
+    sel('payer', [['all', '👥 ყველა'], ['shared', personTag('shared')], ['giorgi', personTag('giorgi')], ['nino', personTag('nino')]]),
     sel('status', [['active', 'მხოლოდ ჩართული'], ['inactive', 'მხოლოდ გამორთული'], ['all', 'ჩართული + გამორთული']]),
     sel('sort', [['group', '↕ ჯგუფებით'], ['name', '↕ სახელით (ა-ჰ)'], ['amountDesc', '↕ თანხით (დიდიდან)'], ['amountAsc', '↕ თანხით (პატარიდან)'], ['next', '↕ შემდეგი გადახდით']])
   ]));
@@ -122,7 +122,7 @@ export function renderTemplates(root) {
       return;
     }
 
-    const previewRate = (state.months[getSelectedMonth()] || state.months[monthKey()] || {}).exchangeRate || 3;
+    const previewRate = (state.months[getSelectedMonth()] || state.months[budgetMonthKey()] || {}).exchangeRate || 3;
     const monthlyEur = (t) => (t.currency === 'GEL' ? gelToEur(t.amount, previewRate) : t.amount) / (t.oneTime ? Infinity : (t.cycleMonths || 1));
     const active = state.templates.filter(t => t.active);
     list.appendChild(el('div', { class: 'tpl-summary tabular-nums', text: `${active.length} აქტიური შაბლონი · თვეში საშუალოდ ≈ ${formatMoney(active.reduce((s, t) => s + monthlyEur(t), 0), 'EUR', 0)}` }));
@@ -155,8 +155,8 @@ export function renderTemplates(root) {
 
     function renderRow(tpl, groupKey) {
       const cat = state.categories.find(c => c.id === tpl.categoryId);
-      // Inside the "essentials" group the category chip would only repeat the group title.
-      const showCategory = !(groupKey === 'essentials' && cat && !cat.parentId);
+      // Inside the "essentials" / "Georgia" groups the main-category chip would only repeat the group.
+      const showCategory = !((groupKey === 'essentials' || groupKey === 'georgia') && cat && !cat.parentId && cat.goalType !== 'min');
       const cycleLabel = tpl.oneTime ? 'ერთჯერადი' : (CYCLE_OPTIONS.find(c => c.value === tpl.cycleMonths)?.label || `${tpl.cycleMonths} თვეში ერთხელ`);
       const nextMonth = tpl.active ? nextDueMonth(tpl) : null;
 
@@ -194,7 +194,7 @@ export function renderTemplates(root) {
         draw();
       });
 
-      const curKey = monthKey();
+      const curKey = budgetMonthKey();
       const inCurrent = !!state.months[curKey]?.transactions.some(t => t.templateId === tpl.id);
       const addMonthBtn = el('button', { class: 'icon-btn', 'aria-label': `${monthLabel(curKey)}-ში დამატება`, title: inCurrent ? `${monthLabel(curKey)}-ში უკვე არის` : `${monthLabel(curKey)}-ში დამატება ახლავე`, text: inCurrent ? '✓' : '＋' });
       addMonthBtn.disabled = inCurrent;
@@ -248,7 +248,7 @@ function openStarterDialog(fileList, onDone) {
   const list = el('ul', { class: 'starter-list' });
   missing.forEach(t => list.appendChild(el('li', { class: 'tabular-nums', text: `${t.name} — ${formatMoney(t.amount, t.currency, 0)}${t.cycleMonths > 1 ? ` · ${t.cycleMonths} თვეში ერთხელ` : ''}${t.firstDueDate ? ` · პირველად ${t.firstDueDate.slice(0, 7)}` : ''}${t.type === 'envelope' ? ' · 🛒 ბიუჯეტი' : ''}${t.toGeorgia ? ' · 📤' : ''} · 👤 ${PAYER_LABELS[t.account]}` })));
   form.appendChild(list);
-  const startInput = el('input', { type: 'month', value: monthKey() });
+  const startInput = el('input', { type: 'month', value: budgetMonthKey() });
   form.appendChild(el('div', { class: 'field' }, [el('label', { text: 'რომელი თვიდან დაიწყოს (სადაც ფაილში თარიღი არ წერია)' }), startInput]));
   form.appendChild(el('p', { class: 'card__sub', text: 'გადახდის დღე = 1-ლი რიცხვი, თუ ფაილში სხვა არ წერია. ტრანზაქციები შეიქმნება „📅 თვის მომზადებისას".' }));
   const actions = el('div', { class: 'btn-row' });
@@ -257,7 +257,7 @@ function openStarterDialog(fileList, onDone) {
   const { close } = openModal(form, { title: '📂 შაბლონები ფაილიდან' });
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    const start = /^\d{4}-\d{2}$/.test(startInput.value) ? startInput.value : monthKey();
+    const start = /^\d{4}-\d{2}$/.test(startInput.value) ? startInput.value : budgetMonthKey();
     let added = 0;
     updateState(draft => { added = addStarterTemplates(draft, start, missing); return draft; });
     toast(`დაემატა ${added} შაბლონი ✓`);
@@ -324,7 +324,7 @@ function openTemplateForm(existing, onSaved) {
   ]);
   cycleSelect.value = existing ? (existing.oneTime ? 'oneTime' : String(existing.cycleMonths)) : '1';
 
-  const dateInput = fieldInputRaw('date', existing?.firstDueDate || monthKey() + '-01');
+  const dateInput = fieldInputRaw('date', existing?.firstDueDate || budgetMonthKey() + '-01');
 
 
   // Opt-in: carry the edit into already generated, still unpaid transactions (this month onward).
@@ -336,7 +336,7 @@ function openTemplateForm(existing, onSaved) {
 
   // "Also add it to this month": a new expense usually starts right now.
   const addNowBox = el('input', { type: 'checkbox' });
-  const addNowMonth = el('input', { type: 'month', value: monthKey(), class: 'inline-month' });
+  const addNowMonth = el('input', { type: 'month', value: budgetMonthKey(), class: 'inline-month' });
   const alreadyIn = (k) => !!existing && !!getState().months[k]?.transactions.some(t => t.templateId === existing.id);
   addNowBox.checked = !isEdit;
   const addNowLabel = el('span', {});
@@ -363,7 +363,7 @@ function openTemplateForm(existing, onSaved) {
     labeledField('ვალუტა', currencySelect),
     eurPreview,
     labeledField('ციკლი', cycleSelect),
-    labeledField('პირველი გადახდა', dateInput),
+    labeledField('გადახდის თარიღი', dateInput),
     labeledField('ვინ იხდის (ვისი ანგარიშიდან იჭრება)', accountSelect),
     applyField,
     addNowField
@@ -391,7 +391,7 @@ function openTemplateForm(existing, onSaved) {
 
     let updatedCount = 0;
     let addedTo = null;
-    const addKey = /^\d{4}-\d{2}$/.test(addNowMonth.value) ? addNowMonth.value : monthKey();
+    const addKey = /^\d{4}-\d{2}$/.test(addNowMonth.value) ? addNowMonth.value : budgetMonthKey();
     updateState(draft => {
       let savedId = existing?.id;
       if (isEdit) {
@@ -402,7 +402,7 @@ function openTemplateForm(existing, onSaved) {
           firstDueDate: dateInput.value, owner: accountSelect.value, account: accountSelect.value, toGeorgia: georgiaBox.checked, oneTime
         });
         if (applyExisting.checked) {
-          const fromKey = monthKey();
+          const fromKey = budgetMonthKey();
           Object.keys(draft.months).filter(k => k >= fromKey).forEach(k => {
             draft.months[k].transactions
               .filter(tx => tx.templateId === t.id && !tx.paid)
