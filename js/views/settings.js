@@ -1,16 +1,19 @@
-// views/settings.js — Bucket CRUD, free-money split, appearance, data, sync, danger zone §5.5.
+// views/settings.js — Settings page, one function per card: admin link, new month / salary day /
+// rate (renderSplitSettings), appearance + dashboard layout (renderAppearance), sync + invite link
+// (renderSync, renderInviteDevice), restore points + cloud history (renderRestore), months
+// (renderMonths), export/import (renderDataSection), danger zone. Plan targets live in Categories.
 
 import { getState, updateState, wipeState, replaceState, snapshotCurrent, deviceName, setDeviceName } from '../state.js';
-import { sumAllPercents, effectiveCardOrder } from '../calc.js';
+import { effectiveCardOrder } from '../calc.js';
 import { el, confirmDialog, toast, openModal } from '../ui.js';
 import { listSnapshots, getSnapshotData, saveSnapshot, summarizeState, SNAPSHOT_REASONS, markSnapshotShared, deleteSnapshot } from '../backup.js';
 import { exportJson, importJson, exportCsv, importCsv } from '../exporter.js';
-import { applyAppearance, checkBackupReminder, APP_VERSION, navigate } from '../app.js';
+import { applyAppearance, APP_VERSION, navigate } from '../app.js';
 import { budgetMonthKey } from '../state.js';
 import { setSelectedMonth, monthLabelFull } from '../monthNav.js';
 import { undoToast } from '../ui.js';
 import { shareJsonBackup, canShareFiles } from '../exporter.js';
-import { pickColor, COLOR_PRESETS } from '../components.js';
+import { COLOR_PRESETS } from '../components.js';
 import * as sync from '../sync.js';
 import { getRatesToken, setRatesToken } from '../rates.js';
 import { t } from '../texts.js';
@@ -51,79 +54,6 @@ export function renderSettings(root) {
   container.appendChild(renderDataSection());
   container.appendChild(renderDangerZone());
   container.appendChild(el('p', { class: 'version-note', text: `აპის ვერსია ${APP_VERSION} · მონაცემების ფორმატი v${getState().version}. აპის განახლება მონაცემებს არ შლის: ისინი ამ მოწყობილობაზე და ღრუბელშია, ფორმატის ცვლილებამდე კი ავტომატურად იქმნება აღდგენის წერტილი „აპის განახლებამდე".` }));
-}
-
-// ---------------- Percent plan (over unified categories) + free-money split ----------------
-
-function renderBuckets() {
-  const card = el('div', { class: 'card' });
-  card.appendChild(el('div', { class: 'card__title', text: 'პროცენტული გეგმა' }));
-  card.appendChild(el('p', { class: 'card__sub', text: 'თითო ძირითად კატეგორიას აქვს სამიზნე პროცენტი შემოსავლიდან; ჯამი უნდა იყოს 100%. ახალი ბლოკი (მაგ. „ინვესტიცია" — მიზნის ტიპი „მინ.") — „კატეგორიები" გვერდზე „+ ახალი კატეგორია".' }));
-
-  const list = el('div', { class: 'order-list', style: 'margin-top:8px' });
-  const sumEl = el('div', { class: 'sum-indicator', style: 'margin-top:8px' });
-
-  function updateSum() {
-    const state = getState();
-    const sum = sumAllPercents(state.settings, state.categories);
-    sumEl.textContent = sum === 100
-      ? `ჯამი: ${sum}% ✓ — ყველაფერი ავტომატურად ინახება`
-      : `ჯამი: ${sum}% (უნდა იყოს 100%)`;
-    sumEl.className = 'sum-indicator ' + (sum === 100 ? 'sum-indicator--ok' : 'sum-indicator--bad');
-  }
-
-  function draw() {
-    const state = getState();
-    list.innerHTML = '';
-
-    state.categories.filter(c => !c.parentId).forEach(cat => {
-      const row = el('div', { class: 'order-list__item', style: 'flex-wrap:wrap;gap:8px' });
-      row.appendChild(el('span', { class: 'color-dot', style: `background:${cat.color};width:24px;height:24px` }));
-      row.appendChild(el('span', { text: cat.name, style: 'flex:1;min-width:120px;font-weight:600' }));
-      const percentInput = el('input', { type: 'number', min: '0', max: '100', value: String(cat.percent), style: 'width:70px;min-height:36px' });
-      percentInput.addEventListener('input', () => {
-        updateState(draft => {
-          const c = draft.categories.find(x => x.id === cat.id);
-          if (c) c.percent = Number(percentInput.value) || 0;
-          return draft;
-        });
-        updateSum();
-      });
-      row.append(percentInput, el('span', { text: '%' }));
-      list.appendChild(row);
-    });
-
-    // Free-money split (fixed pair, percent + color editable).
-    ['giorgi', 'nino'].forEach(owner => {
-      const cfg = state.settings.planFree[owner];
-      const label = owner === 'giorgi' ? 'თავისუფალი (გიორგი)' : 'თავისუფალი (ნინო)';
-      const row = el('div', { class: 'order-list__item', style: 'flex-wrap:wrap;gap:8px' });
-      const colorBtn = el('button', { type: 'button', class: 'color-swatch', style: `background:${cfg.color};width:24px;height:24px` });
-      colorBtn.addEventListener('click', async () => {
-        const color = await pickColor(cfg.color);
-        if (!color) return;
-        updateState(draft => { draft.settings.planFree[owner].color = color; return draft; });
-        toast('ფერი შენახულია ✓');
-        draw();
-      });
-      row.appendChild(colorBtn);
-      row.appendChild(el('span', { text: label, style: 'flex:1;min-width:120px;font-weight:600' }));
-      const percentInput = el('input', { type: 'number', min: '0', max: '100', value: String(cfg.percent), style: 'width:70px;min-height:36px' });
-      percentInput.addEventListener('input', () => {
-        updateState(draft => { draft.settings.planFree[owner].percent = Number(percentInput.value) || 0; return draft; });
-        updateSum();
-      });
-      row.append(percentInput, el('span', { text: '%' }));
-      list.appendChild(row);
-    });
-
-    updateSum();
-  }
-
-  draw();
-  card.appendChild(list);
-  card.appendChild(sumEl);
-  return card;
 }
 
 // ---------------- Salary split + exchange rate ----------------
@@ -693,7 +623,6 @@ function renderDataSection() {
   exportJsonBtn.addEventListener('click', () => {
     exportJson();
     toast('ბექაფი ჩამოტვირთულია ✓');
-    checkBackupReminder();
     backupInfo.textContent = `ბოლო ბექაფი: ${new Date().toLocaleString('ka-GE', { hour12: false })}`;
   });
 

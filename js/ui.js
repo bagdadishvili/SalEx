@@ -6,7 +6,7 @@ export function toast(message, variant = 'ok', { actionLabel = null, onAction = 
   const div = document.createElement('div');
   div.className = `toast toast--${variant}`;
   const text = document.createElement('span');
-  text.textContent = message;
+  text.textContent = rt(message);
   div.appendChild(text);
   let timer = null;
   const hide = () => {
@@ -19,7 +19,7 @@ export function toast(message, variant = 'ok', { actionLabel = null, onAction = 
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'toast__action';
-    btn.textContent = actionLabel;
+    btn.textContent = rt(actionLabel);
     btn.addEventListener('click', () => { hide(); onAction(); });
     div.appendChild(btn);
   }
@@ -79,7 +79,7 @@ export function openModal(bodyEl, { title = '', onClose } = {}) {
     h.className = 'modal__title';
     const r = textResolver ? textResolver(title) : null;
     h.textContent = r ? r.text : title;
-    if (r && r.renameable) h.setAttribute('data-rtext', title);
+    if (r && r.renameable) h.setAttribute('data-rtext', r.key || title);
     modal.appendChild(h);
   }
   modal.appendChild(bodyEl);
@@ -118,7 +118,7 @@ export function confirmDialog(message, { confirmLabel = 'დიახ', cancelLa
     const body = document.createElement('div');
     body.className = 'confirm-dialog';
     const p = document.createElement('p');
-    p.textContent = message;
+    p.textContent = keepLastWords(rt(message));
     body.appendChild(p);
 
     const actions = document.createElement('div');
@@ -126,11 +126,11 @@ export function confirmDialog(message, { confirmLabel = 'დიახ', cancelLa
 
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'btn btn--secondary';
-    cancelBtn.textContent = cancelLabel;
+    cancelBtn.textContent = rt(cancelLabel);
 
     const confirmBtn = document.createElement('button');
     confirmBtn.className = danger ? 'btn btn--danger' : 'btn btn--primary';
-    confirmBtn.textContent = confirmLabel;
+    confirmBtn.textContent = rt(confirmLabel);
 
     actions.appendChild(cancelBtn);
     actions.appendChild(confirmBtn);
@@ -147,15 +147,39 @@ export function confirmDialog(message, { confirmLabel = 'დიახ', cancelLa
 let textResolver = null;
 export function setTextResolver(fn) { textResolver = fn; }
 
+/** The family's wording for a text (toasts, dialogs, placeholders…), or the text itself. */
+export function rt(s) {
+  if (!textResolver || typeof s !== 'string') return s;
+  const r = textResolver(s);
+  return r ? r.text : s;
+}
+
+/**
+ * Keeps the last two words of a sentence together (no-break space), so a hint never ends with
+ * one lonely word wrapped below (also in browsers without CSS text-wrap: pretty). Short texts
+ * (buttons, titles) are balanced by CSS instead. Only short last words — nothing can overflow.
+ */
+export function keepLastWords(s) {
+  if (typeof s !== 'string' || s.length < 40 || s.includes('\n')) return s;
+  const i = s.lastIndexOf(' ');
+  if (i <= 0) return s;
+  const last = s.slice(i + 1);
+  const prev = s.slice(s.lastIndexOf(' ', i - 1) + 1, i);
+  if (!last || last.length > 10 || prev.length + last.length > 22 || s.split(' ').length < 4) return s;
+  return s.slice(0, i) + ' ' + last;
+}
+
 export function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
   Object.entries(attrs).forEach(([k, v]) => {
     if (k === 'class') node.className = v;
     else if (k === 'text') {
       const r = textResolver && !('data-tkey' in attrs) && typeof v === 'string' ? textResolver(v) : null;
-      node.textContent = r ? r.text : v;
-      if (r && r.renameable) node.setAttribute('data-rtext', v);
+      const shown = r ? r.text : v;
+      node.textContent = tag === 'option' || tag === 'textarea' ? shown : keepLastWords(shown);
+      if (r && r.renameable) node.setAttribute('data-rtext', r.key || v);
     }
+    else if ((k === 'placeholder' || k === 'title') && typeof v === 'string') node.setAttribute(k, rt(v));
     else if (k.startsWith('on') && typeof v === 'function') node.addEventListener(k.slice(2), v);
     else if (v !== null && v !== undefined) node.setAttribute(k, v);
   });

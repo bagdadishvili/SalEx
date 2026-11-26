@@ -135,33 +135,6 @@ h1, h2, h3, h4 { margin: 0 0 var(--space-3); font-weight: 700; }
   margin: 0;
 }
 
-/* display:flex would override the HTML `hidden` attribute — restore it explicitly. */
-.app-header__backup-banner[hidden] { display: none; }
-
-.app-header__backup-banner {
-  margin-top: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  background: var(--warning-bg);
-  color: var(--warning);
-  border-radius: var(--radius-sm);
-  font-size: 0.85rem;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.banner-close {
-  margin-left: auto;
-  background: none;
-  border: none;
-  color: inherit;
-  font-size: 1rem;
-  cursor: pointer;
-  padding: 2px 8px;
-  min-height: 32px;
-  flex-shrink: 0;
-}
-
 .view-root {
   flex: 1;
   width: 100%;
@@ -1077,7 +1050,6 @@ h1, h2, h3, h4 { margin: 0 0 var(--space-3); font-weight: 700; }
 .extras__from { grid-column: 1 / 2; }
 .extras__form .btn { grid-column: 2 / 3; }
 .extras__list { display: flex; flex-direction: column; border-top: 1px solid var(--border); margin-top: 4px; }
-.extras-card .detail-row { grid-template-columns: minmax(0, 1fr) auto auto; }
 .plan-rows { display: flex; flex-direction: column; margin: var(--space-2) 0; }
 .plan-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'name inputs' 'name other'; column-gap: var(--space-2); align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); }
 .plan-row__name { grid-area: name; font-weight: 600; font-size: 0.9rem; }
@@ -1174,3 +1146,80 @@ h1, h2, h3, h4 { margin: 0 0 var(--space-3); font-weight: 700; }
 .diag-item--warn .diag-item__title::before { content: '⚠️ '; }
 .diag-item--info .diag-item__title::before { content: 'ℹ️ '; }
 .diag-item--bug .diag-item__title::before { content: '🐞 '; }
+
+/* ---------- v19: two-step bills, readable text, roomier rows, desktop sizes ---------- */
+/* Small text never below ~12.5px; no lonely last word on its own line (also NBSP in ui.js el()). */
+:root { --fs-xs: 0.78rem; --fs-sm: 0.875rem; }
+body { text-wrap: pretty; }
+h1, h2, h3, .card__title, .stat-card__label, .modal__title, .prepare-card__title, .subsection-title, .btn, .card-expand { text-wrap: balance; }
+.stat-card__sub, .card__sub, .detail-row__meta, .row__meta, .stat-card__label, .chip, .restore-row__meta { font-size: var(--fs-xs); }
+.card-expand, .btn--sm, .filter-btn { font-size: var(--fs-sm); }
+.stat-card__label { line-height: 1.35; }
+
+/* Entries inside an opened card: the name always gets the whole first line next to the amount;
+   who/date and the buttons go below. Wide cards (desktop) keep everything on one line. */
+.card-details { container-type: inline-size; }
+.detail-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name amount" "meta acts"; column-gap: var(--space-3); row-gap: 6px; padding: 10px 0; align-items: center; }
+.detail-row__name { grid-area: name; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; line-height: 1.35; font-size: 0.95rem; }
+.detail-row__amount { grid-area: amount; align-self: start; }
+.detail-row__meta { grid-area: meta; line-height: 1.35; }
+.detail-row__sub { font-size: var(--fs-xs); color: var(--text-muted); font-weight: 400; }
+.detail-row__acts { grid-area: acts; display: flex; gap: 6px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+.detail-row--two { grid-template-areas: "name amount" "meta meta" "acts acts"; }
+@container (min-width: 36rem) {
+  .detail-row, .detail-row--two { grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: "name amount acts" "meta amount acts"; }
+}
+
+/* Transactions page rows: name + amount, buttons below on phones; one line when there is room. */
+.list { container-type: inline-size; }
+.row { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "main amount" "acts acts"; align-items: center; column-gap: var(--space-3); row-gap: var(--space-2); }
+.row__main { grid-area: main; min-width: 0; }
+.row__name { overflow-wrap: anywhere; line-height: 1.35; }
+.row__amount { grid-area: amount; min-width: 0; align-self: start; }
+.row__actions { grid-area: acts; margin-left: 0; justify-content: flex-end; align-items: center; flex-wrap: wrap; }
+.row--moved:not(.row--overdue) { border-left: 3px solid var(--accent); }
+@container (min-width: 42rem) {
+  .row { grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: "main amount acts"; }
+}
+
+/* Pay buttons: "⇄ გადატანა" (blue) + "○ ჩამოჭრა" (green) side by side */
+.pay-group { display: inline-flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.pay-btn { min-height: 38px; padding: 4px 12px; font-size: 0.82rem; }
+.pay-btn--move { border-color: var(--accent); color: var(--accent); }
+.pay-btn--move:hover { background: rgba(var(--accent-rgb), 0.1); }
+.pay-btn--move.pay-btn--done, .pay-btn--move.pay-btn--done:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+.pay-btn:disabled { cursor: default; opacity: 0.7; }
+.due-card__step { color: var(--text); }
+
+/* Smooth, polished interactions (switched off for people who prefer less motion) */
+button, .btn, .pay-btn, .filter-btn, .icon-btn, .segmented__btn, .tab-bar__item { -webkit-tap-highlight-color: transparent; transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, transform 0.1s ease; }
+.btn:active:not(:disabled), .pay-btn:active:not(:disabled), .filter-btn:active, .icon-btn:active:not(:disabled) { transform: scale(0.97); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.card-details, .modal { animation: fb-rise 0.18s ease-out; }
+.toast { max-width: min(92vw, 560px); text-align: center; }
+@keyframes fb-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+/* Desktop: bigger navigation and letters */
+@media (min-width: 860px) {
+  .tab-bar { gap: 6px; padding: 8px 16px; }
+  .tab-bar__item { gap: 8px; padding: 10px 18px; min-height: 48px; font-weight: 600; }
+  .tab-bar__icon { font-size: 1.3rem; }
+  .tab-bar__label { font-size: 1rem; letter-spacing: 0; overflow: visible; }
+  .app-header__title { font-size: 1.4rem; }
+}
+@media (min-width: 1024px) { html { font-size: calc(19px * var(--font-scale)); } }
+@media (min-width: 1440px) { html { font-size: calc(20px * var(--font-scale)); } }
+
+/* v19: AI connection, admin text list */
+.ai-key-row { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; }
+.ai-key-row input { flex: 1 1 12rem; min-width: 0; }
+.ai-connect .field input, .ai-connect .field select { width: 100%; }
+.ai-status { min-height: 1.2em; }
+.ai-usage { margin-top: 4px; }
+.ai-note { display: flex; gap: var(--space-2); align-items: flex-start; }
+.ai-note__main { flex: 1; min-width: 0; }
+.admin-list { display: flex; flex-direction: column; margin-top: var(--space-2); }
+.admin-page { margin: var(--space-3) 0 2px; padding: 4px 8px; border-radius: var(--radius-sm); background: var(--surface-2); font-size: var(--fs-sm); font-weight: 700; }
+.admin-row--changed .admin-row__label { color: var(--accent); }
+.admin-row__label span { overflow-wrap: anywhere; }

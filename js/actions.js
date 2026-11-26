@@ -3,8 +3,8 @@
 // one clearly described step at a time. Each action mutates a state draft (inside updateState)
 // and returns a short Georgian description; invalid input throws an Error with a message.
 
-import { todayISO, FREE_BUCKET_ID } from './state.js';
-import { envelopeUsed, formatMoney, isEnvelope, savingsCategories, gelToEur } from './calc.js';
+import { todayISO, FREE_BUCKET_ID, budgetMonthKey } from './state.js';
+import { envelopeUsed, formatMoney, isEnvelope, savingsCategories, gelToEur, isTwoStep } from './calc.js';
 import { setPlanTarget } from './plan.js';
 
 function uid(prefix) {
@@ -183,5 +183,192 @@ export function setTarget(draft, key, { categoryId = null, free = null, targetTy
   return `🎯 ${name}: ${v} — ${scope === 'only' ? 'მხოლოდ ამ თვეში' : 'ამ თვიდან'}`;
 }
 
+/**
+ * Status of a bill (v19): 'unpaid' | 'transferred' (two-step bills: money moved to the personal
+ * account, not debited yet) | 'paid' (= debited), optionally with the real amount.
+ */
+export function setStatus(draft, key, { txnId, status, amount = null }) {
+  const m = needMonth(draft, key);
+  const t = needTxn(m, txnId);
+  if (isEnvelope(t)) throw new Error('ბიუჯეტი (კვება/საწვავი) სტატუსით არ ინიშნება — გამოიყენე envelope');
+  if (status === 'paid') return markPaid(draft, key, { txnId, amount });
+  if (status === 'transferred') {
+    if (!isTwoStep(t, draft.categories)) throw new Error(`„${t.name}" საერთო ანგარიშიდან (ან დანაზოგია) — „გადატანილი" მხოლოდ პირადი ანგარიშის გადასახადს აქვს`);
+    t.paid = false; t.paidAt = null; t.rateAtPayment = null;
+    t.transferredAt = t.transferredAt || todayISO();
+    return `⇄ ${t.name}: გადატანილია, ელოდება ჩამოჭრას`;
+  }
+  if (status === 'unpaid') {
+    t.paid = false; t.paidAt = null; t.rateAtPayment = null;
+    delete t.transferredAt;
+    return `○ ${t.name}: გადაუხდელი`;
+  }
+  throw new Error('status: unpaid, transferred ან paid');
+}
+
+// ---------------- Generic record changes (v19, for the assistant: "change anything") ----------------
+// Every field that may be changed is listed with a checker, so a wrong value is refused with a
+// clear message instead of breaking the data. Targets (plan %) go through setTarget only.
+
+const isoDate = (v) => {
+  if (v === null || v === '') return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(v))) throw new Error(`თარიღი უნდა იყოს YYYY-MM-DD (${v})`);
+  return String(v);
+};
+const money = (v) => { const n = round2(v); if (!(n >= 0) || !Number.isFinite(Number(v))) throw new Error(`არასწორი თანხა: ${v}`); return n; };
+const moneyOrNull = (v) => (v === null || v === '' ? null : money(v));
+const oneOf = (...vals) => (v) => { if (!vals.includes(v)) throw new Error(`დასაშვებია: ${vals.join(', ')}`); return v; };
+const text = (max, required = false) => (v) => {
+  const s = String(v ?? '').trim();
+  if (required && !s) throw new Error('ცარიელი არ შეიძლება');
+  return s.slice(0, max);
+};
+const int = (min, max) => (v) => { const n = Math.round(Number(v)); if (!(n >= min && n <= max)) throw new Error(`რიცხვი ${min}–${max}`); return n; };
+const bool = (v) => v === true || v === 'true' || v === 1;
+const color = (v) => { if (!/^#[0-9a-f]{6}$/i.test(String(v))) throw new Error('ფერი: #RRGGBB'); return String(v); };
+const strList = (v) => { if (!Array.isArray(v)) throw new Error('სია უნდა იყოს'); return v.map(String).slice(0, 60); };
+
+const FIELDS = {
+  transaction: {
+    name: text(80, true), categoryId: 'cat', account: oneOf('shared', 'giorgi', 'nino'), currency: oneOf('EUR', 'GEL'),
+    amountPlanned: money, amountActual: moneyOrNull, paid: bool, paidAt: isoDate, transferredAt: isoDate,
+    rateAtPayment: (v) => (v === null || v === '' ? null : money(v)), dueDate: isoDate, note: text(200), toGeorgia: bool, dailyHint: bool
+  },
+  template: {
+    name: text(80, true), categoryId: 'cat', type: oneOf('fixed', 'variable', 'envelope'), amount: money, currency: oneOf('EUR', 'GEL'),
+    cycleMonths: int(1, 24), firstDueDate: isoDate, account: oneOf('shared', 'giorgi', 'nino'), toGeorgia: bool, active: bool, oneTime: bool, dailyHint: bool
+  },
+  category: {
+    name: text(60, true), color, owner: oneOf('shared', 'giorgi', 'nino'), parentId: 'parent', goalType: oneOf('min', 'max'), term: oneOf('short', 'long', '')
+  },
+  month: { exchangeRate: (v) => { const n = Number(v); if (!(n > 0 && n < 100)) throw new Error('კურსი 0-ზე მეტი'); return Math.round(n * 10000) / 10000; } },
+  settings: {
+    salaryDay: int(0, 31), theme: oneOf('light', 'dark'), fontScale: oneOf('small', 'medium', 'large'), accentColor: color,
+    newMonthMode: oneOf('wizard', 'auto'), rateAuto: bool, contributionBasis: oneOf('actual', 'plan'), hiddenCards: strList, dashboardCardOrder: strList
+  }
+};
+export const RECORD_FIELDS = Object.fromEntries(Object.entries(FIELDS).map(([k, v]) => [k, Object.keys(v)]));
+
+function checkFields(draft, type, fields, self = null) {
+  const rules = FIELDS[type];
+  if (!rules) throw new Error('type: transaction, template, category, month ან settings');
+  if (!fields || typeof fields !== 'object' || !Object.keys(fields).length) throw new Error('fields ცარიელია');
+  const out = {};
+  Object.entries(fields).forEach(([k, v]) => {
+    const rule = rules[k];
+    if (!rule) throw new Error(`ველი „${k}" ვერ შეიცვლება (${type}: ${Object.keys(rules).join(', ')})`);
+    if (rule === 'cat') out[k] = needCategory(draft, v).id;
+    else if (rule === 'parent') {
+      if (v === null || v === '' || v === FREE_BUCKET_ID) out[k] = v === FREE_BUCKET_ID ? FREE_BUCKET_ID : null;
+      else {
+        const p = needCategory(draft, v);
+        if (self && (p.id === self || p.parentId === self)) throw new Error('კატეგორია საკუთარ თავში ვერ ჩაჯდება');
+        out[k] = p.id;
+      }
+    } else out[k] = rule(v);
+  });
+  return out;
+}
+
+function findRecord(draft, type, id, key) {
+  if (type === 'transaction') {
+    const m = needMonth(draft, key);
+    return { rec: needTxn(m, id), month: m };
+  }
+  if (type === 'template') {
+    const rec = draft.templates.find(x => x.id === id);
+    if (!rec) throw new Error(`შაბლონი ვერ მოიძებნა (${id})`);
+    return { rec };
+  }
+  if (type === 'category') return { rec: needCategory(draft, id) };
+  if (type === 'month') return { rec: needMonth(draft, key) };
+  if (type === 'settings') return { rec: draft.settings };
+  throw new Error('type: transaction, template, category, month ან settings');
+}
+
+const short = (v) => (typeof v === 'string' ? `„${v.slice(0, 40)}"` : JSON.stringify(v));
+
+/** Changes listed fields of any record (validated). */
+export function updateRecord(draft, key, { type, id = null, fields }) {
+  const { rec } = findRecord(draft, type, id, key);
+  const clean = checkFields(draft, type, fields, type === 'category' ? rec.id : null);
+  Object.assign(rec, clean);
+  if (type === 'transaction' || type === 'template') {
+    if ('account' in clean) rec.owner = clean.account;
+    if (type === 'transaction' && 'paid' in clean) {
+      if (clean.paid) { rec.paidAt = rec.paidAt || todayISO(); rec.amountActual = rec.amountActual ?? rec.amountPlanned; } else { rec.paidAt = null; rec.rateAtPayment = null; }
+    }
+  }
+  if (type === 'month' && 'exchangeRate' in clean) rec.rateSource = { kind: 'manual', source: 'ხელით (AI)', at: new Date().toISOString() };
+  const label = type === 'settings' ? 'პარამეტრები' : type === 'month' ? `თვე ${key}` : (rec.name || id);
+  return `✎ ${label}: ${Object.entries(clean).map(([k, v]) => `${k} = ${short(v)}`).join(', ')}`;
+}
+
+/** Creates a transaction (in the month), a template or a category. */
+export function createRecord(draft, key, { type, fields }) {
+  if (type === 'transaction') {
+    const f = checkFields(draft, 'transaction', { currency: 'EUR', account: 'shared', ...fields });
+    if (!f.name || !f.categoryId || !(f.amountPlanned >= 0)) throw new Error('საჭიროა name, categoryId, amountPlanned');
+    const m = needMonth(draft, key);
+    const paid = !!f.paid;
+    m.transactions.push({
+      id: uid('txn'), templateId: null, name: f.name, categoryId: f.categoryId, owner: f.account, account: f.account,
+      toGeorgia: !!f.toGeorgia, currency: f.currency, amountPlanned: f.amountPlanned,
+      amountActual: paid ? (f.amountActual ?? f.amountPlanned) : null, paid, paidAt: paid ? (f.paidAt || todayISO()) : null,
+      rateAtPayment: null, dueDate: f.dueDate || `${key}-01`, note: f.note || '', ...(f.transferredAt ? { transferredAt: f.transferredAt } : {})
+    });
+    return `➕ ${f.name}: ${formatMoney(f.amountPlanned, f.currency)} (${key})`;
+  }
+  if (type === 'template') {
+    const f = checkFields(draft, 'template', { currency: 'EUR', account: 'shared', type: 'fixed', cycleMonths: 1, firstDueDate: `${key}-01`, ...fields });
+    if (!f.name || !f.categoryId || !(f.amount > 0)) throw new Error('საჭიროა name, categoryId, amount');
+    draft.templates.push({ id: uid('tpl'), active: true, oneTime: false, toGeorgia: false, ...f, owner: f.account });
+    return `🧾 ახალი შაბლონი „${f.name}": ${formatMoney(f.amount, f.currency)}, ${f.cycleMonths} თვეში ერთხელ, ${f.firstDueDate}-დან`;
+  }
+  if (type === 'category') {
+    const f = checkFields(draft, 'category', { owner: 'shared', goalType: 'max', color: '#94a3b8', ...fields });
+    if (!f.name) throw new Error('საჭიროა name');
+    draft.categories.push({ id: uid('cat'), percent: 0, targetType: 'percent', amount: null, georgiaTransfer: false, parentId: null, ...f });
+    return `🏷️ ახალი კატეგორია „${f.name}"`;
+  }
+  throw new Error('type: transaction, template ან category');
+}
+
+/** Deletes a transaction, a template, an unused category, or a whole past month. */
+export function deleteRecord(draft, key, { type, id = null }) {
+  if (type === 'transaction') {
+    const m = needMonth(draft, key);
+    const t = needTxn(m, id);
+    m.transactions = m.transactions.filter(x => x.id !== id);
+    // a deleted template entry must not come back on the next render
+    if (t.templateId && !(m.skipTemplates || []).includes(t.templateId)) m.skipTemplates = [...(m.skipTemplates || []), t.templateId];
+    return `🗑 ${t.name} (${key})`;
+  }
+  if (type === 'template') {
+    const t = draft.templates.find(x => x.id === id);
+    if (!t) throw new Error(`შაბლონი ვერ მოიძებნა (${id})`);
+    draft.templates = draft.templates.filter(x => x.id !== id);
+    return `🗑 შაბლონი „${t.name}" (უკვე შექმნილი ჩანაწერები რჩება)`;
+  }
+  if (type === 'category') {
+    const c = needCategory(draft, id);
+    const used = draft.templates.some(x => x.categoryId === id) || draft.categories.some(x => x.parentId === id)
+      || Object.values(draft.months).some(m => m.transactions.some(x => x.categoryId === id || x.fromSavings === id));
+    if (used) throw new Error(`„${c.name}" გამოიყენება (ჩანაწერები/შაბლონები/ქვეკატეგორიები) — ჯერ გადაიტანე ისინი`);
+    draft.categories = draft.categories.filter(x => x.id !== id);
+    return `🗑 კატეგორია „${c.name}"`;
+  }
+  if (type === 'month') {
+    needMonth(draft, key);
+    if (key >= budgetMonthKey()) throw new Error('მიმდინარე და მომავალი თვე არ იშლება — მხოლოდ გასული');
+    delete draft.months[key];
+    return `🗑 თვე ${key} მთლიანად`;
+  }
+  throw new Error('type: transaction, template, category ან month');
+}
+
 /** Runs a list of {action, input} — used by the assistant after the user confirms. */
-export const ACTIONS = { addExpense, spendFromSavings, envelopeSpend, envelopeSetLeft, envelopeMarkSpent, moveEnvelopeBudget, markPaid, setTxnAmount, setIncome, setTarget };
+export const ACTIONS = {
+  addExpense, spendFromSavings, envelopeSpend, envelopeSetLeft, envelopeMarkSpent, moveEnvelopeBudget, markPaid, setTxnAmount,
+  setIncome, setTarget, setStatus, updateRecord, createRecord, deleteRecord
+};

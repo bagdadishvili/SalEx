@@ -6,7 +6,7 @@ import { runSelfChecks } from './calc.js';
 import { saveSnapshotIfDue } from './backup.js';
 import * as sync from './sync.js';
 import { toast, openModal, el, whenHistorySettled, setTextResolver } from './ui.js';
-import { t, installTextEditing, onTextEditMode, setTextEditMode, defaultText, resolveText } from './texts.js';
+import { t, installTextEditing, onTextEditMode, setTextEditMode, defaultText, resolveText, withPage } from './texts.js';
 import { renderAdmin } from './views/admin.js';
 import { renderDashboard } from './views/dashboard.js';
 import { renderTransactions } from './views/transactions.js';
@@ -79,6 +79,17 @@ function render(route) {
   if (target > 0) requestAnimationFrame(() => { if (Math.abs(window.scrollY - target) > 2) window.scrollTo(0, target); });
 }
 
+/**
+ * Admin page helper (v19): draws every page once off-screen so the text catalog learns all
+ * their titles, buttons and hints (dialog texts are added when a dialog is first opened).
+ */
+export function collectAllTexts() {
+  ['dashboard', 'transactions', 'templates', 'categories', 'settings', 'assistant'].forEach(r => {
+    const box = document.createElement('div');
+    withPage(r, () => { try { routes[r](box); } catch (e) { console.warn('[texts] could not scan', r, e); } });
+  });
+}
+
 /** Re-renders the current page (e.g. after data arrived from another device). */
 export function rerender() {
   render(currentRouteFromHash());
@@ -98,41 +109,8 @@ function hexToRgb(hex) {
   return m ? { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) } : null;
 }
 
-function checkBackupReminder() {
-  const { settings } = getState();
-  const banner = document.getElementById('backup-banner');
-  banner.hidden = true;
-
-  // Dismissed recently — stay quiet for 30 days.
-  if (settings.backupReminderDismissedAt) {
-    const d = (Date.now() - new Date(settings.backupReminderDismissedAt).getTime()) / 86400000;
-    if (d < 30) return;
-  }
-  if (isPristine()) return; // nothing to back up yet
-
-  let msg = null;
-  if (!settings.lastBackupAt) {
-    msg = 'რჩევა: ჯერ არ გაქვთ გაკეთებული JSON ბექაფი — გააკეთეთ პარამეტრებში.';
-  } else {
-    const days = (Date.now() - new Date(settings.lastBackupAt).getTime()) / 86400000;
-    if (days > 30) msg = `ბოლო ბექაფი იყო ${Math.floor(days)} დღის წინ — რეკომენდირებულია ახალი JSON ექსპორტი.`;
-  }
-  if (!msg) return;
-
-  banner.innerHTML = '';
-  const span = document.createElement('span');
-  span.textContent = msg;
-  const closeBtn = document.createElement('button');
-  closeBtn.className = 'banner-close';
-  closeBtn.setAttribute('aria-label', 'შეხსენების დახურვა');
-  closeBtn.textContent = '✕';
-  closeBtn.addEventListener('click', () => {
-    updateState(draft => { draft.settings.backupReminderDismissedAt = new Date().toISOString(); return draft; });
-    banner.hidden = true;
-  });
-  banner.append(span, closeBtn);
-  banner.hidden = false;
-}
+// (v19: the "make a JSON backup" reminder banner is gone for good — restore points, the daily
+// cloud copy and the sync already keep the data safe; JSON export stays in Settings.)
 
 // ---------------- sync indicator + "sync paused" banner ----------------
 
@@ -275,7 +253,6 @@ function init() {
   loadState();
   setTextResolver(resolveText);
   applyAppearance();
-  checkBackupReminder();
 
   if (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.protocol === 'file:') {
     runSelfChecks();
@@ -341,6 +318,7 @@ function askNewText(key, current, def) {
     const input = el('input', { type: 'text', value: current, maxlength: key.startsWith('~') ? '300' : '80' });
     const form = el('form', { 'data-noedit': '' }, [
       el('p', { class: 'card__sub', text: `საწყისი: „${def}"` }),
+      /\{\d+\}/.test(def) ? el('p', { class: 'card__sub', text: '{1}, {2}… — ადგილები, სადაც აპი თავად ჩასვამს ციფრებს (თანხა, რაოდენობა, თარიღი). დატოვე ისინი ახალ ტექსტშიც.' }) : null,
       el('div', { class: 'field' }, [el('label', { text: 'ახალი ტექსტი' }), input])
     ]);
     const save = el('button', { class: 'btn btn--primary', type: 'submit', text: 'შენახვა' });
@@ -356,8 +334,8 @@ function askNewText(key, current, def) {
 }
 
 /** Shown in Settings; bump together with CACHE_VERSION in sw.js. */
-export const APP_VERSION = '18';
+export const APP_VERSION = '19';
 
-export { applyAppearance, checkBackupReminder };
+export { applyAppearance };
 
 init();

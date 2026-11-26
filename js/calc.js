@@ -101,6 +101,27 @@ export function isFromSavings(txn) {
   return !!txn && txn.kind === 'fromSavings';
 }
 
+// ---- Two-step payments (v19): a bill debited from a PERSONAL account (not the shared one) ----
+// First the money is moved to that account ("⇄ გადატანილია", txn.transferredAt = date), later
+// the bank takes it ("✓ ჩამოჭრილია" = paid). Shared-account bills, savings transfers, own free
+// money and food/fuel budgets stay one step.
+
+/** Does this entry go in two steps (transfer, then debit)? */
+export function isTwoStep(txn, categories = null) {
+  if (!txn || isEnvelope(txn) || isExtra(txn) || isFromSavings(txn)) return false;
+  if (txn.account !== 'giorgi' && txn.account !== 'nino') return false;
+  if (categories) {
+    if (topIdOf(categories, txn.categoryId) === FREE_BUCKET_ID) return false;
+    if (isSavingsTxn(txn, categories)) return false;
+  }
+  return true;
+}
+
+/** The money is already on the account it is debited from (or already debited). */
+export function isTransferred(txn) {
+  return !!(txn && (txn.paid || txn.transferredAt));
+}
+
 // ---- Envelopes ("ბიუჯეტი": food, fuel…) — a planned amount that is spent gradually ----
 
 export function isEnvelope(txn) {
@@ -396,7 +417,12 @@ export function isSavingsTxn(txn, categories) {
  * envelopes = what is left in open envelopes (food, fuel…); savings = not yet transferred.
  */
 export function computeRemaining(month, categories = null, settings = null) {
-  const out = { total: 0, bills: 0, envelopes: 0, savings: 0, count: 0, byAccount: { shared: 0, giorgi: 0, nino: 0 }, billsByAccount: { shared: 0, giorgi: 0, nino: 0 }, next: [] };
+  const out = {
+    total: 0, bills: 0, envelopes: 0, savings: 0, count: 0,
+    byAccount: { shared: 0, giorgi: 0, nino: 0 }, billsByAccount: { shared: 0, giorgi: 0, nino: 0 }, next: [],
+    // v19 two-step bills of personal accounts: still to move there / moved, waiting for the bank
+    toTransfer: { giorgi: 0, nino: 0 }, awaitingDebit: { giorgi: 0, nino: 0 }
+  };
   // Savings targets not transferred yet (per (sub)category, by whose they are).
   if (categories) {
     ({ categories } = planFor(month, categories, null));
@@ -426,7 +452,10 @@ export function computeRemaining(month, categories = null, settings = null) {
     out.byAccount[acc] += rem;
     if (isEnvelope(t)) out.envelopes += rem;
     else if (isSavingsTxn(t, categories)) out.savings += rem;
-    else { out.bills += rem; out.billsByAccount[acc] += rem; out.next.push(t); }
+    else {
+      out.bills += rem; out.billsByAccount[acc] += rem; out.next.push(t);
+      if (isTwoStep(t, categories)) (t.transferredAt ? out.awaitingDebit : out.toTransfer)[acc] += rem;
+    }
   });
   out.next.sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
   return out;
@@ -653,10 +682,11 @@ export function sumAllPercents(settings, categories, T = 0) {
 export function formatMoney(value, currency, decimals = 2) {
   const n = Number(value) || 0;
   const parts = Math.abs(n).toFixed(decimals).split('.');
-  const intPart = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  // no-break spaces (v19): an amount never splits over two lines ("662" here, "€" below)
+  const intPart = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
   const sign = n < 0 && Math.abs(n) >= 0.5 * Math.pow(10, -decimals) ? '-' : '';
   const symbol = currency === 'GEL' ? '₾' : '€';
-  return parts[1] !== undefined ? `${sign}${intPart},${parts[1]} ${symbol}` : `${sign}${intPart} ${symbol}`;
+  return parts[1] !== undefined ? `${sign}${intPart},${parts[1]} ${symbol}` : `${sign}${intPart} ${symbol}`;
 }
 
 export function formatPercent(value, decimals = 1) {
@@ -751,7 +781,7 @@ export function runSelfChecks() {
   assertClose('year overview spent == 650', yo.rows[0].spent, 650, 0.01);
   assertClose('year overview saved == 200', yo.rows[0].saved, 200, 0.01);
   assertClose('year overview leftover == 150', yo.rows[0].leftover, 150, 0.01);
-  assertEq('formatMoney 0 decimals', formatMoney(1234.6, 'EUR', 0), '1 235 €');
+  assertEq('formatMoney 0 decimals', formatMoney(1234.6, 'EUR', 0), '1 235 €');
 
   // Envelope: 1000 planned, 340 spent -> paid 340, remaining 660; closed -> remaining 0.
   const env = { id: 'e', categoryId: 'cat_essentials', currency: 'EUR', amountPlanned: 1000, kind: 'envelope', spends: [{ amount: 300 }, { amount: 40 }], paid: false, account: 'shared' };
@@ -808,7 +838,7 @@ export function runSelfChecks() {
   // Due card: unpaid savings template is NOT a bill; envelope rest is not a bill either.
   const remB = computeRemaining({ exchangeRate: 3, income: { giorgi: 2000, nino: 2000 }, transactions: [
     { id: 'b1', categoryId: 'cat_essentials', currency: 'EUR', amountPlanned: 130, paid: false, account: 'nino' },
-    { id: 's1', categoryId: 'cat_savings', currency: 'EUR', amountPlanned: 263, paid: false, account: 'giorgi' }, env2, ex
+    { id: 's1', categoryId: 'cat_savings', currency: 'EUR', amountPlanned: 240, paid: false, account: 'giorgi' }, env2, ex
   ] }, categories, settings);
   assertClose('due bills exclude savings + envelopes (130)', remB.bills, 130);
   assertClose('due bills by account: nino 130', remB.billsByAccount.nino, 130);
@@ -816,7 +846,7 @@ export function runSelfChecks() {
   // Month overview: bills vs budgets apart, savings not an expense, income = costs + savings + free.
   const mo = computeMonthOverview({ exchangeRate: 3, income: { giorgi: 2000, nino: 2000 }, transactions: [
     { id: 'b1', categoryId: 'cat_essentials', currency: 'EUR', amountPlanned: 130, amountActual: 130, paid: true, account: 'nino' },
-    { id: 's1', categoryId: 'cat_savings', currency: 'EUR', amountPlanned: 263, paid: false, account: 'giorgi' }, env2, ex
+    { id: 's1', categoryId: 'cat_savings', currency: 'EUR', amountPlanned: 240, paid: false, account: 'giorgi' }, env2, ex
   ] }, categories, settings);
   assertClose('overview bills planned 130 (no savings)', mo.bills.planned, 130);
   assertClose('overview budgets used 650 of 1000', mo.budgets.used, 650);
@@ -841,7 +871,7 @@ export function runSelfChecks() {
     { id: 'sl', name: 'y', term: 'long', targetType: 'amount', amount: 200, goalType: 'min', parentId: 'sg', owner: 'nino' }
   ]);
   assertClose('savings card: short 300, long 200, total 500', so.short.planned * 1000 + so.long.planned + so.total.planned / 1000, 300 * 1000 + 200 + 0.5);
-  assertEq('formatMoney negative', formatMoney(-12.5, 'EUR'), '-12,50 €');
+  assertEq('formatMoney negative', formatMoney(-12.5, 'EUR'), '-12,50 €');
 
   // v18: a month's own plan copy wins over the global plan (December change must not rewrite November).
   const pc = [{ id: 'sv', name: 'sv', targetType: 'amount', amount: 200, percent: 0, goalType: 'min', parentId: null, owner: 'giorgi' }];
@@ -863,6 +893,22 @@ export function runSelfChecks() {
   const ro2 = computeRangeOverview({ '2026-11': sm2 }, categories, '2026-11', '2026-11', null, '2026-11');
   assertClose('from savings: period saved 150, spent 90', ro2.rows[0].saved * 1000 + ro2.rows[0].spent, 150090);
   assertClose('from savings: month still shows 240 transferred', computeSavingsOverview(sm2, categories).items[0].done, 240);
+
+  // v19: bills from a personal account go in two steps — transferred, then debited.
+  const two = { id: 'L', categoryId: 'cat_essentials', currency: 'EUR', amountPlanned: 300, paid: false, account: 'giorgi' };
+  const tsm = { exchangeRate: 3, income: { giorgi: 1000, nino: 1000 }, transactions: [
+    two, { ...two, id: 'M', account: 'nino', amountPlanned: 80, transferredAt: '2026-11-02' },
+    { ...two, id: 'R', account: 'shared', amountPlanned: 900 },
+    { id: 'S', categoryId: 'cat_savings', currency: 'EUR', amountPlanned: 100, paid: false, account: 'nino' }
+  ] };
+  const trm = computeRemaining(tsm, categories, settings);
+  assertEq('two-step: personal-account bill', isTwoStep(two, categories), true);
+  assertEq('two-step: shared-account bill is one step', isTwoStep({ ...two, account: 'shared' }, categories), false);
+  assertEq('two-step: savings transfer is one step', isTwoStep(tsm.transactions[3], categories), false);
+  assertClose('two-step: giorgi still to transfer 300', trm.toTransfer.giorgi, 300);
+  assertClose('two-step: nino transferred, waits for the bank 80', trm.awaitingDebit.nino * 1000 + trm.toTransfer.nino, 80000);
+  assertClose('two-step: transferred bill is still unpaid (due 1280)', trm.bills, 1280);
+  assertEq('two-step: paid counts as transferred', isTransferred({ ...two, paid: true }), true);
 
   const passed = results.filter(r => r.pass).length;
   const failed = results.filter(r => !r.pass);

@@ -93,7 +93,7 @@ export function exportCsv() {
   const nameOf = (id) => categories.find(c => c.id === id)?.name || '';
   const georgiaOf = (t) => (isGeorgia(t, categories) ? 'yes' : 'no');
 
-  const headers = ['month', 'name', 'category', 'bucket', 'georgia_transfer', 'owner', 'account', 'currency', 'amount_planned', 'amount_actual', 'amount_eur', 'rate_used', 'paid', 'paid_at', 'due_date', 'note'];
+  const headers = ['month', 'name', 'category', 'bucket', 'georgia_transfer', 'owner', 'account', 'currency', 'amount_planned', 'amount_actual', 'amount_eur', 'rate_used', 'paid', 'paid_at', 'due_date', 'note', 'transferred_at'];
   const rows = [headers.join(',')];
 
   Object.keys(months).sort().forEach(monthKey => {
@@ -117,7 +117,8 @@ export function exportCsv() {
         t.paid ? 'yes' : 'no',
         t.paidAt || '',
         t.dueDate || '',
-        t.note || ''
+        t.note || '',
+        t.transferredAt || ''
       ].map(csvEscape).join(',');
       rows.push(row);
     });
@@ -181,7 +182,7 @@ export function importCsv(file) {
         const iAccount = col('account');
         const iCat = col('category'), iGeo = col('georgia_transfer'), iOwner = col('owner'),
           iCur = col('currency'), iActual = col('amount_actual'), iRate = col('rate_used'),
-          iPaid = col('paid'), iPaidAt = col('paid_at'), iDue = col('due_date'), iNote = col('note');
+          iPaid = col('paid'), iPaidAt = col('paid_at'), iDue = col('due_date'), iNote = col('note'), iMoved = col('transferred_at');
         const get = (r, i) => (i >= 0 && r[i] !== undefined ? String(r[i]).trim() : '');
 
         let added = 0, skipped = 0;
@@ -222,7 +223,8 @@ export function importCsv(file) {
               paid,
               paidAt: paid ? (get(r, iPaidAt) || null) : null,
               rateAtPayment: paid && currency === 'GEL' && rateRaw !== '' ? Number(rateRaw) : null,
-              dueDate, note: get(r, iNote)
+              dueDate, note: get(r, iNote),
+              ...(!paid && /^\d{4}-\d{2}-\d{2}$/.test(get(r, iMoved)) ? { transferredAt: get(r, iMoved) } : {})
             });
             added++;
           });

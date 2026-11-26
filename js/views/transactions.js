@@ -4,9 +4,9 @@ import { getState, updateState, ensureMonth, todayISO, FREE_BUCKET_ID } from '..
 import { generateMonthTransactions, monthNeedsGeneration, monthIsPrepared, initMonth, addTemplateToMonth } from '../monthEngine.js';
 import { openPrepareWizard, preparationPreview } from '../prepare.js';
 import { monthLabelFull } from '../monthNav.js';
-import { txnAmountEur, txnPlannedEur, txnPaidEur, topIdOf, resolveTopCategory, formatMoney, parseAmountInput, isEnvelope, isExtra, envelopeSpent, envelopeUsed, ACCOUNT_LABELS } from '../calc.js';
+import { txnAmountEur, txnPlannedEur, txnPaidEur, resolveTopCategory, formatMoney, parseAmountInput, isEnvelope, isExtra, envelopeSpent, envelopeUsed, isTwoStep, isTransferred } from '../calc.js';
 import { openEnvelopeDialog } from '../envelope.js';
-import { t, tx, personName } from '../texts.js';
+import { t, tx, personName, genitive } from '../texts.js';
 import { fetchEurGelRate } from '../rates.js';
 import { el, openModal, confirmDialog, toast, undoToast, formatDate } from '../ui.js';
 import { getSelectedMonth, onMonthChange } from '../monthNav.js';
@@ -17,13 +17,13 @@ function uid(prefix) {
 }
 
 let unsubscribe = null;
-let statusFilter = 'all'; // all | unpaid | paid
+let statusFilter = 'all'; // all | unpaid | moved (transferred, not yet debited) | paid
 let ownerFilter = 'all';  // all | giorgi | nino | shared
 let groupByBucket = false;
 
 /** Lets other pages open this list pre-filtered (e.g. dashboard "still to pay" → unpaid). */
 export function setTransactionsFilter(status = 'all', owner = 'all') {
-  statusFilter = ['all', 'unpaid', 'paid'].includes(status) ? status : 'all';
+  statusFilter = ['all', 'unpaid', 'moved', 'paid'].includes(status) ? status : 'all';
   ownerFilter = owner;
 }
 
@@ -48,9 +48,10 @@ export function renderTransactions(root) {
   const statusBtns = {
     all: filterBtn(t('filter.all'), () => setStatusFilter('all'), 'filter.all'),
     unpaid: filterBtn(t('filter.unpaid'), () => setStatusFilter('unpaid'), 'filter.unpaid'),
+    moved: filterBtn(t('filter.moved'), () => setStatusFilter('moved'), 'filter.moved'),
     paid: filterBtn(t('filter.paid'), () => setStatusFilter('paid'), 'filter.paid')
   };
-  statusRow.append(statusBtns.all, statusBtns.unpaid, statusBtns.paid);
+  statusRow.append(statusBtns.all, statusBtns.unpaid, statusBtns.moved, statusBtns.paid);
   container.appendChild(statusRow);
 
   const ownerRow = el('div', { class: 'filter-row' });
@@ -126,6 +127,9 @@ export function renderTransactions(root) {
     let txns = month.transactions.slice();
     const isOpen = (t) => !t.paid; // envelopes count as open until closed for the month
     if (statusFilter === 'unpaid') txns = txns.filter(isOpen);
+    if (statusFilter === 'moved') txns = txns.filter(t => !t.paid && t.transferredAt);
+    // "⇄ transferred" only matters when the month has bills paid from a personal account
+    statusBtns.moved.hidden = !month.transactions.some(t => isTwoStep(t, categories)) && statusFilter !== 'moved';
     if (statusFilter === 'paid') txns = txns.filter(t => t.paid || (isEnvelope(t) && envelopeSpent(t) > 0));
     if (ownerFilter !== 'all') txns = txns.filter(t => (t.account || 'shared') === ownerFilter);
     txns.sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
@@ -147,7 +151,7 @@ export function renderTransactions(root) {
     }
 
     if (!groupByBucket) {
-      txns.forEach(tr => list.appendChild(txnRow(tr, month, categories, draw)));
+      txns.forEach(tr => list.appendChild(txnRow(tr, month, key, categories, draw)));
     } else {
       // One group per category (as in the "კატეგორიები" page), with count and sum.
       const order = [];
@@ -166,7 +170,7 @@ export function renderTransactions(root) {
           el('span', {}, [cat.color ? el('span', { class: 'color-dot', style: `background:${cat.color}` }) : null, ` ${cat.name}`]),
           el('span', { class: 'tabular-nums', text: `${group.length} · ${formatMoney(sum, 'EUR', 0)}` })
         ]));
-        group.forEach(tr => list.appendChild(txnRow(tr, month, categories, draw)));
+        group.forEach(tr => list.appendChild(txnRow(tr, month, key, categories, draw)));
       });
     }
   }
@@ -180,14 +184,14 @@ function filterBtn(label, onClick, tkey) {
   return btn;
 }
 
-function txnRow(txn, month, categories, refresh) {
+function txnRow(txn, month, key, categories, refresh) {
   const category = categories.find(c => c.id === txn.categoryId);
   const top = category ? resolveTopCategory(categories, category.id) : null;
   const bucket = top ? (top.parentId === FREE_BUCKET_ID ? freePseudoCategory() : top) : null;
   const envelope = isEnvelope(txn);
   const overdue = !envelope && !txn.paid && txn.dueDate && txn.dueDate < todayISO();
 
-  const row = el('div', { class: 'row' + (txn.paid ? ' row--paid' : '') + (overdue ? ' row--overdue' : '') });
+  const row = el('div', { class: 'row' + (txn.paid ? ' row--paid' : '') + (overdue ? ' row--overdue' : '') + (!txn.paid && txn.transferredAt ? ' row--moved' : '') });
 
   const main = el('div', { class: 'row__main' }, [
     el('div', { class: 'row__name', text: txn.name }),
@@ -224,14 +228,14 @@ function txnRow(txn, month, categories, refresh) {
   const payBtn = payButton(txn, month, refresh);
 
   const editBtn = el('button', { class: 'icon-btn', 'aria-label': 'რედაქტირება', text: '✎' });
-  editBtn.addEventListener('click', () => openTransactionForm(txn, monthKeyOf(month), refresh));
+  editBtn.addEventListener('click', () => openTransactionForm(txn, key, refresh));
 
   const deleteBtn = el('button', { class: 'icon-btn', 'aria-label': 'წაშლა', text: '🗑' });
   deleteBtn.addEventListener('click', async () => {
     const ok = await confirmDialog('წავშალო ეს ტრანზაქცია?', { danger: true, confirmLabel: 'წაშლა' });
     if (!ok) return;
     const copy = JSON.parse(JSON.stringify(txn));
-    const monthOfTxn = monthKeyOf(month);
+    const monthOfTxn = key;
     updateState(draft => {
       const m = findMonthByTxnId(draft, txn.id);
       if (m) {
@@ -265,54 +269,85 @@ function txnRow(txn, month, categories, refresh) {
 }
 
 /**
- * Clear pay control: "○ გადახდა" (outlined) → tap marks paid; "✓ გადახდილია" (green) → tap
- * marks unpaid again, with an undo. Envelopes get "＋ ხარჯი". Used here and on dashboard cards.
+ * Pay controls of one entry (always ONE element, so rows lay out the same everywhere):
+ *  - one step (shared account): "○ გადახდა" → "✓ გადახდილია" (tap again = unpaid, with undo);
+ *  - two steps (v19, a bill debited from a personal account): "⇄ გადატანა" = the money is moved
+ *    to that account, and "○ ჩამოჭრა" = the bank took it. Debited implies transferred;
+ *  - food/fuel budget: "＋ ხარჯი"; extras and spent-from-savings: a chip (already paid).
+ * Used here and in the dashboard cards.
  */
 export function payButton(txn, month, refresh) {
   if (txn.kind === 'extra') return el('span', { class: 'chip', title: 'დამატებითი ხარჯი (უკვე გადახდილი)', text: '🧺 დამატებითი' });
   if (txn.kind === 'fromSavings') return el('span', { class: 'chip', title: 'დანაზოგიდან გადახდილი ხარჯი', text: '💸 დანაზოგიდან' });
-  const envelope = isEnvelope(txn);
-  if (envelope) {
+  if (isEnvelope(txn)) {
     const b = el('button', { type: 'button', class: 'pay-btn pay-btn--envelope', 'aria-label': 'ხარჯის ან ნაშთის ჩაწერა', text: '＋ ხარჯი' });
     b.addEventListener('click', (e) => { e.stopPropagation(); openEnvelopeDialog(txn.id, refresh); });
     return b;
   }
-  const b = el('button', {
+  const two = isTwoStep(txn, getState().categories);
+  const payBtn = el('button', {
     type: 'button',
     class: 'pay-btn' + (txn.paid ? ' pay-btn--done' : ''),
-    'aria-label': txn.paid ? 'გადახდილია — დააჭირე გასაუქმებლად' : 'გადახდილად მონიშვნა',
-    text: txn.paid ? t('btn.paid') : `○ ${t('btn.pay')}`
+    'aria-label': txn.paid ? `${two ? 'ჩამოჭრილია' : 'გადახდილია'} — დააჭირე გასაუქმებლად` : (two ? 'ჩამოჭრილად მონიშვნა' : 'გადახდილად მონიშვნა'),
+    text: two ? (txn.paid ? t('btn.debited') : `○ ${t('btn.debit')}`) : (txn.paid ? t('btn.paid') : `○ ${t('btn.pay')}`)
   });
-  b.addEventListener('click', (e) => {
+  payBtn.addEventListener('click', (e) => { e.stopPropagation(); togglePaid(txn, refresh, two); });
+  if (!two) return payBtn;
+
+  const moved = isTransferred(txn);
+  const moveBtn = el('button', {
+    type: 'button',
+    class: 'pay-btn pay-btn--move' + (moved ? ' pay-btn--done' : ''),
+    'aria-label': txn.paid ? 'ჩამოჭრილია — ესე იგი გადატანილიცაა' : moved ? 'გადატანილია — დააჭირე გასაუქმებლად' : `${genitive(personName(txn.account))} ანგარიშზე გადატანილად მონიშვნა`,
+    text: moved ? t('btn.transferred') : `⇄ ${t('btn.transfer')}`
+  });
+  if (txn.paid) moveBtn.disabled = true;
+  moveBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (txn.paid) {
-      const before = { paid: txn.paid, paidAt: txn.paidAt, rateAtPayment: txn.rateAtPayment, amountActual: txn.amountActual };
-      updateState(draft => {
-        const tr = findTxn(draft, txn.id);
-        tr.paid = false; tr.paidAt = null; tr.rateAtPayment = null;
-        return draft;
-      });
-      undoToast('გადაუხდელად აღინიშნა', () => {
-        updateState(draft => { Object.assign(findTxn(draft, txn.id), before); return draft; });
-        refresh();
-      });
-      refresh();
-      return;
-    }
-    if (txnIsVariable(txn) || txn.currency === 'GEL') {
-      openActualAmountDialog(txn, () => refresh());
+    const was = txn.transferredAt || null;
+    updateState(draft => {
+      const tr = findTxn(draft, txn.id);
+      if (was) delete tr.transferredAt; else tr.transferredAt = todayISO();
+      return draft;
+    });
+    if (was) {
+      undoToast('გადატანა გაუქმდა', () => { updateState(draft => { findTxn(draft, txn.id).transferredAt = was; return draft; }); refresh(); });
     } else {
-      updateState(draft => {
-        const tr = findTxn(draft, txn.id);
-        tr.paid = true; tr.paidAt = todayISO(); tr.rateAtPayment = null;
-        tr.amountActual = tr.amountActual ?? tr.amountPlanned;
-        return draft;
-      });
-      toast('გადახდილად აღინიშნა ✓');
-      refresh();
+      toast(`⇄ გადატანილია — ${genitive(personName(txn.account))} ანგარიშზეა, ელოდება ჩამოჭრას ✓`);
     }
+    refresh();
   });
-  return b;
+  return el('span', { class: 'pay-group' }, [moveBtn, payBtn]);
+}
+
+/** Paid ↔ unpaid (with undo). Variable or ₾ bills ask for the real amount first. */
+function togglePaid(txn, refresh, two) {
+  if (txn.paid) {
+    const before = { paid: txn.paid, paidAt: txn.paidAt, rateAtPayment: txn.rateAtPayment, amountActual: txn.amountActual };
+    updateState(draft => {
+      const tr = findTxn(draft, txn.id);
+      tr.paid = false; tr.paidAt = null; tr.rateAtPayment = null;
+      return draft;
+    });
+    undoToast(two ? 'ჩამოჭრა გაუქმდა' : 'გადაუხდელად აღინიშნა', () => {
+      updateState(draft => { Object.assign(findTxn(draft, txn.id), before); return draft; });
+      refresh();
+    });
+    refresh();
+    return;
+  }
+  if (txnIsVariable(txn) || txn.currency === 'GEL') {
+    openActualAmountDialog(txn, () => refresh());
+    return;
+  }
+  updateState(draft => {
+    const tr = findTxn(draft, txn.id);
+    tr.paid = true; tr.paidAt = todayISO(); tr.rateAtPayment = null;
+    tr.amountActual = tr.amountActual ?? tr.amountPlanned;
+    return draft;
+  });
+  toast(two ? 'ჩამოჭრილად აღინიშნა ✓' : 'გადახდილად აღინიშნა ✓');
+  refresh();
 }
 
 function txnIsVariable(txn) {
@@ -321,10 +356,6 @@ function txnIsVariable(txn) {
   if (!txn.templateId) return false;
   const tpl = state.templates.find(t => t.id === txn.templateId);
   return tpl ? tpl.type === 'variable' : false;
-}
-function monthKeyOf(month) {
-  const state = getState();
-  return Object.keys(state.months).find(k => state.months[k] === month) || getSelectedMonth();
 }
 
 function findTxn(draft, id) {
@@ -345,10 +376,11 @@ function openActualAmountDialog(txn, onDone) {
   const state = getState();
   const month = findMonthByTxnId(state, txn.id) || state.months[getSelectedMonth()];
   const isGel = txn.currency === 'GEL';
+  const two = isTwoStep(txn, state.categories);
   const form = el('form', {});
   form.appendChild(el('p', { class: 'card__sub', text: `გეგმა: ${formatMoney(txn.amountPlanned, txn.currency)}` }));
   const input = el('input', { type: 'text', inputmode: 'decimal', value: txn.amountPlanned.toFixed(2).replace('.', ',') });
-  form.appendChild(el('div', { class: 'field' }, [el('label', { text: `გადახდილი თანხა (${isGel ? '₾' : '€'})` }), input]));
+  form.appendChild(el('div', { class: 'field' }, [el('label', { text: `${two ? 'ჩამოჭრილი' : 'გადახდილი'} თანხა (${isGel ? '₾' : '€'})` }), input]));
 
   let rateInput = null;
   const eurPreview = el('div', { class: 'card__sub tabular-nums' });
@@ -379,7 +411,7 @@ function openActualAmountDialog(txn, onDone) {
   updatePreview();
 
   const actions = el('div', { class: 'btn-row' });
-  const saveBtn = el('button', { class: 'btn btn--primary', type: 'submit', text: '✓ გადახდილია' });
+  const saveBtn = el('button', { class: 'btn btn--primary', type: 'submit', text: two ? t('btn.debited') : t('btn.paid') });
   actions.appendChild(saveBtn);
   form.appendChild(actions);
 
@@ -398,7 +430,7 @@ function openActualAmountDialog(txn, onDone) {
       t.rateAtPayment = isGel ? rate : null;
       return draft;
     });
-    toast('გადახდილად აღინიშნა ✓');
+    toast(two ? 'ჩამოჭრილად აღინიშნა ✓' : 'გადახდილად აღინიშნა ✓');
     close();
     onDone();
   });
@@ -428,10 +460,27 @@ export function openTransactionForm(existing, monthKeyStr, onSaved, presets = {}
 
   const dueDateInput = el('input', { type: 'date', value: existing?.dueDate || `${monthKeyStr}-01` });
 
-
-
   const accountSelect = el('select', {}, Object.entries(PAYER_LABELS).map(([v, t]) => el('option', { value: v, text: v === 'shared' ? 'საერთო ანგარიში' : t })));
   accountSelect.value = existing?.account || 'shared';
+
+  // v19: a bill from a personal account — is the money already moved to that account?
+  const movedBox = el('input', { type: 'checkbox' });
+  movedBox.checked = !!(existing && existing.transferredAt);
+  const movedField = el('label', { class: 'field checkbox-field' }, [movedBox, el('span', { text: '⇄ გადატანილია — ფული უკვე ამ ანგარიშზეა, ბანკი ჯერ არ ჩამოჭრა' })]);
+  const syncMoved = () => {
+    const probe = { ...(existing || {}), kind: existing?.kind, account: accountSelect.value, categoryId: categorySelect.value };
+    movedField.hidden = !isTwoStep(probe, state.categories) || !!existing?.paid;
+  };
+  accountSelect.addEventListener('change', syncMoved);
+  categorySelect.addEventListener('change', syncMoved);
+  syncMoved();
+  /** Writes the transfer status onto the saved entry (inside updateState). */
+  const applyMoved = (tr, cats) => {
+    if (!tr) return;
+    if (!isTwoStep(tr, cats)) { delete tr.transferredAt; return; }
+    if (tr.paid) return; // debited = transferred anyway
+    if (movedBox.checked) tr.transferredAt = tr.transferredAt || todayISO(); else delete tr.transferredAt;
+  };
 
   const noteInput = el('input', { type: 'text', value: existing?.note || '' });
 
@@ -472,6 +521,7 @@ export function openTransactionForm(existing, monthKeyStr, onSaved, presets = {}
     el('div', { class: 'field' }, [el('label', { text: 'გადახდის თარიღი' }), dueDateInput]),
     el('label', { class: 'field checkbox-field' }, [georgiaBox, el('span', { text: '📤 საქართველოში გადასარიცხი' })]),
     el('div', { class: 'field' }, [el('label', { text: 'ვინ იხდის (ვისი ანგარიშიდან)' }), accountSelect]),
+    movedField,
     el('div', { class: 'field' }, [el('label', { text: 'შენიშვნა' }), noteInput]),
     asTemplateField
   );
@@ -509,11 +559,12 @@ export function openTransactionForm(existing, monthKeyStr, onSaved, presets = {}
           const t = findTxn(draft, existing.id);
           Object.assign(t, { templateId: tplId, name, categoryId: categorySelect.value, currency: currencySelect.value, amountPlanned: amount, dueDate: dueDateInput.value, owner: accountSelect.value, account: accountSelect.value, toGeorgia: georgiaBox.checked, note: noteInput.value });
           if (paidInput && t.paid) t.amountActual = paidAmount;
+          applyMoved(t, draft.categories);
           if (m && !m.preparedAt) m.addedSingly = true;
         } else {
           addTemplateToMonth(draft, tplId, monthKeyStr);
           const t = draft.months[monthKeyStr].transactions.find(x => x.templateId === tplId);
-          if (t) { t.note = noteInput.value; t.dueDate = dueDateInput.value || t.dueDate; }
+          if (t) { t.note = noteInput.value; t.dueDate = dueDateInput.value || t.dueDate; applyMoved(t, draft.categories); }
         }
         return draft;
       }
@@ -524,14 +575,17 @@ export function openTransactionForm(existing, monthKeyStr, onSaved, presets = {}
           amountPlanned: amount, dueDate: dueDateInput.value, owner: accountSelect.value, account: accountSelect.value, toGeorgia: georgiaBox.checked, note: noteInput.value
         });
         if (paidInput && t.paid) t.amountActual = paidAmount;
+        applyMoved(t, draft.categories);
       } else {
         ensureMonth(draft, monthKeyStr);
-        draft.months[monthKeyStr].transactions.push({
+        const list = draft.months[monthKeyStr].transactions;
+        list.push({
           id: uid('txn'), templateId: null, name, categoryId: categorySelect.value,
           owner: accountSelect.value, account: accountSelect.value, toGeorgia: georgiaBox.checked, currency: currencySelect.value, amountPlanned: amount,
           amountActual: null, paid: false, paidAt: null, rateAtPayment: null,
           dueDate: dueDateInput.value, note: noteInput.value
         });
+        applyMoved(list[list.length - 1], draft.categories);
       }
       return draft;
     });

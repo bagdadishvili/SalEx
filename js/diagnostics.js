@@ -84,8 +84,15 @@ export function runDiagnostics(state, { currentKey = null } = {}) {
     // 6. Unpaid fixed bills in a past month.
     if (isPast) {
       const open = txns.filter(t => !t.paid && !isEnvelope(t) && !isExtra(t) && !isFromSavings(t));
-      if (open.length) {
-        add('info', k, `${open.length} გადასახადი გადაუხდელად დარჩა: ${open.slice(0, 3).map(t => t.name).join(', ')}${open.length > 3 ? '…' : ''}`,
+      // v19: moved to the personal account, but never marked as debited
+      const moved = open.filter(t => t.transferredAt);
+      if (moved.length) {
+        add('info', k, `${moved.length} გადატანილი გადასახადი ჩამოჭრილად არ მონიშნულა: ${moved.slice(0, 3).map(t => t.name).join(', ')}${moved.length > 3 ? '…' : ''}`,
+          'თუ ბანკმა უკვე ჩამოჭრა — დააჭირე „○ ჩამოჭრა"-ს (ამ თვის ტრანზაქციებში).');
+      }
+      const rest = open.filter(t => !t.transferredAt);
+      if (rest.length) {
+        add('info', k, `${rest.length} გადასახადი გადაუხდელად დარჩა: ${rest.slice(0, 3).map(t => t.name).join(', ')}${rest.length > 3 ? '…' : ''}`,
           'თუ გადაიხადე — მონიშნე გადახდილად; თუ აღარ მოდის — წაშალე ამ თვიდან.');
       }
     }

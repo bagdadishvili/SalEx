@@ -1,157 +1,302 @@
-// ai.js — the in-app assistant's connection to Claude (v18). Static app, no server: the browser
-// calls the Anthropic Messages API directly with the family's OWN API key, stored only on this
-// device (never in backups/sync). Claude can only PROPOSE the app's own actions (actions.js);
-// nothing changes until the user ticks and confirms them. It may also file "fix in the app" notes.
+// ai.js — the assistant's connection to an AI provider, straight from the browser (v19):
+// Claude (Anthropic), ChatGPT (OpenAI), Gemini (Google), OpenRouter (many models with one key)
+// or any other OpenAI-compatible service (Mistral, DeepSeek, Groq, a local Ollama/LM Studio…).
+// The family's own API keys stay on THIS device only (never in backups or sync).
+// Each provider has an adapter: it turns the shared tool list (aiTools.js) and the conversation
+// into its own request, and its answer back into { text, calls, stop, message, usage }.
+// The conversation is kept in the provider's own format and is append-only (needed for
+// Claude's thinking blocks and Gemini's thought signatures, and it keeps the prompt cache warm).
 
-import {
-  planFor, totalIncome, isEnvelope, isExtra, isFromSavings, envelopeUsed, txnPlannedEur,
-  computeSavingsOverview, resolveTopCategory, FREE_BUCKET_ID
-} from './calc.js';
-import { planInMonth } from './plan.js';
+const STORE = 'familyBudget.ai.v1';
+const OLD_KEY = 'familyBudget.aiKey'; // v18: one Anthropic key
 
-const KEY_STORE = 'familyBudget.aiKey';
-const API_URL = 'https://api.anthropic.com/v1/messages';
-export const AI_MODEL = 'claude-opus-5-5';
-
-export function getAiKey() { try { return localStorage.getItem(KEY_STORE) || ''; } catch { return ''; } }
-export function setAiKey(k) { try { if (k) localStorage.setItem(KEY_STORE, k.trim()); else localStorage.removeItem(KEY_STORE); } catch { /* ignore */ } }
-
-const ACC = { type: 'string', enum: ['shared', 'giorgi', 'nino'], description: 'whose account pays: shared, giorgi or nino' };
-
-/** Tool name → [action name in actions.js, input mapper]. report_issue is handled separately. */
-export const TOOL_MAP = {
-  add_expense: ['addExpense', (i) => ({ name: i.name, amount: i.amount, categoryId: i.category_id, account: i.account, paid: i.paid !== false, toGeorgia: !!i.to_georgia, note: i.note || '' })],
-  spend_from_savings: ['spendFromSavings', (i) => ({ savingsCategoryId: i.savings_category_id, amount: i.amount, name: i.name, categoryId: i.category_id || null, account: i.account || null })],
-  envelope_spend: ['envelopeSpend', (i) => ({ envelopeId: i.envelope_id, amount: i.amount, note: i.note || '' })],
-  envelope_set_left: ['envelopeSetLeft', (i) => ({ envelopeId: i.envelope_id, left: i.left })],
-  envelope_mark_spent: ['envelopeMarkSpent', (i) => ({ envelopeId: i.envelope_id, amount: i.amount ?? null })],
-  move_envelope_budget: ['moveEnvelopeBudget', (i) => ({ fromId: i.from_id, toId: i.to_id, amount: i.amount })],
-  mark_paid: ['markPaid', (i) => ({ txnId: i.txn_id, amount: i.amount ?? null })],
-  set_txn_amount: ['setTxnAmount', (i) => ({ txnId: i.txn_id, planned: i.planned ?? null, actual: i.actual ?? null })],
-  set_income: ['setIncome', (i) => ({ giorgi: i.giorgi ?? null, nino: i.nino ?? null })],
-  set_target: ['setTarget', (i) => ({ categoryId: i.category_id || null, free: i.free || null, targetType: i.target_type, value: i.value, scope: i.scope || 'forward' })]
+export const PROVIDERS = {
+  anthropic: { label: 'Claude (Anthropic)', kind: 'anthropic', base: 'https://api.anthropic.com/v1', model: 'claude-opus-5-5', keyHint: 'sk-ant-…', keyUrl: 'https://console.anthropic.com/settings/keys' },
+  openai: { label: 'ChatGPT (OpenAI)', kind: 'openai', base: 'https://api.openai.com/v1', model: 'gpt-5-mini', keyHint: 'sk-…', keyUrl: 'https://platform.openai.com/api-keys' },
+  gemini: { label: 'Gemini (Google)', kind: 'gemini', base: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-2.5-flash', keyHint: 'AIza…', keyUrl: 'https://aistudio.google.com/apikey' },
+  openrouter: { label: 'OpenRouter — ბევრი მოდელი ერთი გასაღებით', kind: 'openai', base: 'https://openrouter.ai/api/v1', model: 'google/gemini-2.5-flash', keyHint: 'sk-or-…', keyUrl: 'https://openrouter.ai/keys' },
+  custom: { label: 'სხვა სერვისი (OpenAI-თავსებადი)', kind: 'openai', base: '', model: '', keyHint: 'API key', keyUrl: '' }
 };
 
-const obj = (props, required) => ({ type: 'object', properties: props, required, additionalProperties: false });
-const num = (d) => ({ type: 'number', description: d });
-const str = (d) => ({ type: 'string', description: d });
+// ---------------- settings (this device only) ----------------
 
-export const TOOLS = [
-  { name: 'add_expense', description: 'Record a new expense in the selected month (paid by default, because it already happened). Use the category ids from the data.',
-    input_schema: obj({ name: str('what it was, in Georgian'), amount: num('EUR amount'), category_id: str('category id'), account: ACC, paid: { type: 'boolean' }, to_georgia: { type: 'boolean' }, note: str('optional note') }, ['name', 'amount', 'category_id']) },
-  { name: 'spend_from_savings', description: 'Money taken OUT of a savings category to pay an expense. Records the expense as paid and lowers that saving\'s balance. Does NOT change the month\'s savings transfer. Use this whenever the user says they spent money from savings.',
-    input_schema: obj({ savings_category_id: str('savings category id'), amount: num('EUR'), name: str('what it was spent on'), category_id: str('category of the expense itself (not a savings category); default essentials'), account: ACC }, ['savings_category_id', 'amount', 'name']) },
-  { name: 'envelope_spend', description: 'A purchase paid from a spend-as-you-go budget (food, fuel…).',
-    input_schema: obj({ envelope_id: str('budget transaction id'), amount: num('amount in the budget currency'), note: str('optional') }, ['envelope_id', 'amount']) },
-  { name: 'envelope_set_left', description: 'The user tells how much is LEFT in a budget (from the bank app); spent is worked out.',
-    input_schema: obj({ envelope_id: str('budget transaction id'), left: num('amount left') }, ['envelope_id', 'left']) },
-  { name: 'envelope_mark_spent', description: 'Count the rest of a budget (or a given part) as spent without entering receipts. Omit amount = everything left.',
-    input_schema: obj({ envelope_id: str('budget transaction id'), amount: num('optional amount') }, ['envelope_id']) },
-  { name: 'move_envelope_budget', description: 'Move an amount of budget from one food/fuel budget to another in the same month (e.g. fuel left-over was spent on food).',
-    input_schema: obj({ from_id: str('budget id where money was left'), to_id: str('budget id where it was spent'), amount: num('amount') }, ['from_id', 'to_id', 'amount']) },
-  { name: 'mark_paid', description: 'Mark an existing bill as paid, optionally with the real amount.',
-    input_schema: obj({ txn_id: str('transaction id'), amount: num('optional paid amount') }, ['txn_id']) },
-  { name: 'set_txn_amount', description: 'Change the planned and/or paid amount of one existing entry. Only when the user asks to correct an amount.',
-    input_schema: obj({ txn_id: str('transaction id'), planned: num('new planned amount'), actual: num('new paid amount (entry must be paid)') }, ['txn_id']) },
-  { name: 'set_income', description: 'Set the month\'s salary of Giorgi and/or Nino (EUR).',
-    input_schema: obj({ giorgi: num('EUR'), nino: num('EUR') }, []) },
-  { name: 'set_target', description: 'Change a plan target of a category (or free money) from the selected month on (scope forward) or for that month only. Earlier months never change. target_type auto = follows this month\'s planned expenses of that category.',
-    input_schema: obj({ category_id: str('category id (or use free)'), free: { type: 'string', enum: ['giorgi', 'nino'] }, target_type: { type: 'string', enum: ['percent', 'amount', 'auto'] }, value: num('percent or EUR; omit for auto'), scope: { type: 'string', enum: ['forward', 'only'] } }, ['target_type']) },
-  { name: 'report_issue', description: 'Write a note for the app developer about something that looks like a bug, a confusing screen, or a missing feature that needs a CODE change (not a data change). Saved to the app\'s "to fix" list. Use it when you notice inconsistent numbers, or the user had to work around the app.',
-    input_schema: obj({ title: str('short title, Georgian'), detail: str('what is wrong, where, and what the code should do instead') }, ['title', 'detail']) }
-];
-
-export const SYSTEM_PROMPT = `You are the assistant inside "ოჯახის ბიუჯეტი", a family budget web app for Giorgi and Nino (Germany, money also sent to Georgia). Always answer in Georgian, short and plain — they are not programmers.
-
-How the app works:
-- Each month has income (giorgi, nino), an exchange rate (GEL per 1 EUR) and transactions.
-- Categories are dashboard blocks. goal "min" = savings (money moved to savings), "max" = spending. A category's owner is shared (50/50), giorgi or nino. Sub-categories roll up into their parent block. parent "free" = personal free spending.
-- Transaction kinds: normal bill (planned amount; when paid it also has a paid amount, which is what lists show), "envelope" = spend-as-you-go budget like food/fuel (planned budget, spends, left), "extra" = bought with an envelope's money, "fromSavings" = an expense paid with money taken out of savings.
-- Each month has its own plan (targets per category: percent, € amount or auto). Changing a target applies from the selected month on (or only that month); earlier months never change.
-
-Rules:
-- You can change data ONLY by calling the tools. Every call is shown to the user as a proposal; nothing happens until they confirm. Say briefly what you propose and why.
-- Do exactly what the user asked — the smallest set of changes. Never "tidy up" other numbers, never edit entries the user did not mention, never change targets unless asked.
-- "I spent X from savings on Y" → spend_from_savings (do NOT edit the savings transfer). "Food/fuel is all spent" → envelope_mark_spent. "X left in fuel went to food" → move_envelope_budget.
-- Use only ids that appear in the data. If something is ambiguous (which saving, which month, which person), ask one short question instead of guessing.
-- Amounts are EUR unless the user says ₾/lari.
-- If you notice numbers that do not add up, a screen that misled the user, or a workaround they needed, call report_issue with what the CODE should do differently. Also mention data problems from the "checks" list when relevant.`;
-
-/** Compact picture of the selected month for the model (ids included so it can act). */
-export function buildContext(state, key, findings = []) {
-  const m = state.months[key];
-  const cats = state.categories;
-  const nameOf = (id) => (cats.find(c => c.id === id) || {}).name || id;
-  const ctx = { today: new Date().toISOString().slice(0, 10), month: key };
-  if (!m) { ctx.note = 'this month is not created yet'; return ctx; }
-  const { categories: rc } = planFor(m, cats, state.settings);
-  ctx.income = m.income; ctx.rate_gel_per_eur = m.exchangeRate; ctx.total_income = totalIncome(m);
-  ctx.categories = rc.map(c => {
-    const top = resolveTopCategory(cats, c.id);
-    const cfg = planInMonth(state, { cat: c.id }, key);
-    return {
-      id: c.id, name: c.name, owner: c.owner || 'shared',
-      parent: c.parentId === FREE_BUCKET_ID ? 'free' : (c.parentId ? nameOf(c.parentId) : null),
-      kind: top && top.parentId !== FREE_BUCKET_ID && top.goalType === 'min' ? 'savings' : (c.parentId === FREE_BUCKET_ID ? 'free' : 'spending'),
-      target: cfg.targetType === 'auto' ? 'auto' : cfg.targetType === 'amount' ? `${cfg.amount} EUR` : `${cfg.percent}%`
-    };
-  });
-  ctx.free_money_target = ['giorgi', 'nino'].map(p => ({ person: p, ...planInMonth(state, { free: p }, key) }));
-  ctx.transactions = m.transactions.map(t => {
-    const r = { id: t.id, name: t.name, category: nameOf(t.categoryId), category_id: t.categoryId, account: t.account, currency: t.currency };
-    if (isEnvelope(t)) {
-      Object.assign(r, { kind: 'envelope', budget: t.amountPlanned, used: Math.round(envelopeUsed(t, m.transactions, m.exchangeRate) * 100) / 100, closed: !!t.paid });
-    } else {
-      Object.assign(r, { planned: t.amountPlanned, paid: !!t.paid, paid_amount: t.paid ? (t.amountActual ?? t.amountPlanned) : null, due: t.dueDate });
-      if (isExtra(t)) r.kind = 'extra';
-      if (isFromSavings(t)) { r.kind = 'fromSavings'; r.from_savings = nameOf(t.fromSavings); }
-      if (t.toGeorgia) r.to_georgia = true;
-      if (t.currency === 'GEL') r.planned_eur = Math.round(txnPlannedEur(t, m.exchangeRate) * 100) / 100;
-    }
-    return r;
-  });
-  ctx.savings = computeSavingsOverview(m, cats, state.months, key).items.map(s => ({ id: s.id, name: s.name, owner: s.owner, plan: Math.round(s.planned), transferred: Math.round(s.done), spent_from_it: Math.round(s.withdrawn), balance_all_months: s.balance === null ? null : Math.round(s.balance) }));
-  if (findings.length) ctx.checks = findings.slice(0, 15).map(f => `${f.month || ''} ${f.title}`.trim());
-  return ctx;
+function readStore() {
+  try { return JSON.parse(localStorage.getItem(STORE) || '{}') || {}; } catch { return {}; }
 }
 
-let useFallbacks = true;
+/** { provider, keys:{id:key}, models:{id:model}, bases:{id:url}, effort:'low'|'medium' } */
+export function getAiConfig() {
+  const c = readStore();
+  const cfg = { provider: PROVIDERS[c.provider] ? c.provider : 'anthropic', keys: c.keys || {}, models: c.models || {}, bases: c.bases || {}, effort: c.effort === 'medium' ? 'medium' : 'low' };
+  if (!cfg.keys.anthropic) { try { const old = localStorage.getItem(OLD_KEY); if (old) cfg.keys.anthropic = old; } catch { /* ignore */ } }
+  return cfg;
+}
 
-/** One request to the Messages API. Returns the parsed response or throws a Georgian error. */
-export async function callClaude(messages) {
-  const key = getAiKey();
-  if (!key) throw new Error('ჯერ ჩაწერე API გასაღები');
-  const body = {
-    model: AI_MODEL,
-    max_tokens: 16000,
-    system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
-    tools: TOOLS,
-    tool_choice: { type: 'auto' },
-    output_config: { effort: 'medium' },
-    messages
+export function setAiConfig(partial) {
+  const cur = getAiConfig();
+  const next = { ...cur, ...partial, keys: { ...cur.keys, ...(partial.keys || {}) }, models: { ...cur.models, ...(partial.models || {}) }, bases: { ...cur.bases, ...(partial.bases || {}) } };
+  Object.keys(next.keys).forEach(k => { if (!next.keys[k]) delete next.keys[k]; });
+  try {
+    localStorage.setItem(STORE, JSON.stringify(next));
+    if (partial.keys && 'anthropic' in partial.keys) localStorage.removeItem(OLD_KEY); // moved into the new store
+  } catch { /* storage full or blocked */ }
+  return next;
+}
+
+/** The provider in use, with its key, model and address filled in. */
+export function activeProvider() {
+  const c = getAiConfig();
+  const preset = PROVIDERS[c.provider];
+  return {
+    id: c.provider, ...preset,
+    key: (c.keys[c.provider] || '').trim(),
+    model: (c.models[c.provider] || preset.model || '').trim(),
+    base: (c.bases[c.provider] || preset.base || '').trim().replace(/\/+$/, ''),
+    effort: c.effort
   };
-  const headers = {
-    'content-type': 'application/json',
-    'x-api-key': key,
-    'anthropic-version': '2026-10-21',
-    'anthropic-dangerous-direct-browser-access': 'true'
-  };
-  if (useFallbacks) { body.fallbacks = 'default'; headers['anthropic-beta'] = 'server-side-fallback-2026-07-01'; }
+}
+
+export function hasAiKey() { return !!activeProvider().key; }
+
+// ---------------- adapters ----------------
+
+const safeJson = (s) => { try { return typeof s === 'string' ? (JSON.parse(s || '{}') || {}) : (s || {}); } catch { return {}; } };
+
+/** Gemini accepts only a subset of JSON Schema (upper-case types, no additionalProperties). */
+function geminiSchema(s) {
+  if (!s || typeof s !== 'object') return s;
+  const out = {};
+  if (s.type) out.type = String(s.type).toUpperCase();
+  if (s.description) out.description = s.description;
+  if (s.enum) out.enum = s.enum;
+  if (s.items) out.items = geminiSchema(s.items);
+  if (s.properties) out.properties = Object.fromEntries(Object.entries(s.properties).map(([k, v]) => [k, geminiSchema(v)]));
+  if (s.required && s.required.length) out.required = s.required;
+  return out;
+}
+
+const anthropic = {
+  url: (p) => `${p.base}/messages`,
+  headers: (p, o) => ({
+    'content-type': 'application/json', 'x-api-key': p.key, 'anthropic-version': '2026-10-21',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    ...(o.fallbacks ? { 'anthropic-beta': 'server-side-fallback-2026-07-01' } : {})
+  }),
+  body(p, system, tools, messages, o) {
+    // Cache marker on the newest block: the whole conversation so far is read from the cache
+    // on the next request (moving the marker does not change the history itself).
+    const msgs = messages.slice();
+    const last = msgs[msgs.length - 1];
+    if (last && Array.isArray(last.content) && last.content.length) {
+      const c = last.content.slice();
+      c[c.length - 1] = { ...c[c.length - 1], cache_control: { type: 'ephemeral' } };
+      msgs[msgs.length - 1] = { ...last, content: c };
+    }
+    const b = {
+      model: p.model, max_tokens: 16000,
+      system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
+      tools: tools.map(t => ({ name: t.name, description: t.description, input_schema: t.params })),
+      tool_choice: { type: 'auto' }, messages: msgs
+    };
+    if (o.effort) b.output_config = { effort: p.effort };
+    if (o.fallbacks) b.fallbacks = 'default';
+    return b;
+  },
+  parse(data) {
+    const content = Array.isArray(data.content) && data.content.length ? data.content : [{ type: 'text', text: '…' }];
+    const calls = content.filter(b => b.type === 'tool_use').map(b => ({ id: b.id, name: b.name, input: b.input || {} }));
+    const stop = calls.length ? 'tool' : ({ max_tokens: 'max', refusal: 'refusal' }[data.stop_reason] || 'end');
+    const u = data.usage || {};
+    return {
+      text: content.filter(b => b.type === 'text').map(b => b.text).join('\n').trim(), calls, stop,
+      message: { role: 'assistant', content },
+      usage: { input: (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0), cached: u.cache_read_input_tokens || 0, output: u.output_tokens || 0 }
+    };
+  },
+  userTurn: (results, texts) => [{ role: 'user', content: [
+    ...results.map(r => ({ type: 'tool_result', tool_use_id: r.id, content: r.content, ...(r.error ? { is_error: true } : {}) })),
+    ...texts.map(text => ({ type: 'text', text }))
+  ] }],
+  isTurnStart: (m) => m.role === 'user' && Array.isArray(m.content) && m.content.every(b => b.type === 'text'),
+  /** One-time recovery when the API refuses old thinking blocks: drop them, keep text + tool calls. */
+  stripThinking: (messages) => messages.map(m => {
+    if (m.role !== 'assistant' || !Array.isArray(m.content)) return m;
+    const content = m.content.filter(b => b.type !== 'thinking' && b.type !== 'redacted_thinking');
+    return { ...m, content: content.length ? content : [{ type: 'text', text: '…' }] };
+  }),
+  modelsUrl: (p) => `${p.base}/models?limit=100`,
+  modelIds: (data) => (data.data || []).map(m => m.id)
+};
+
+const openai = {
+  url: (p) => `${p.base}/chat/completions`,
+  headers: (p) => ({ 'content-type': 'application/json', authorization: `Bearer ${p.key}` }),
+  body(p, system, tools, messages, o) {
+    const b = {
+      model: p.model, messages: [{ role: 'system', content: system }, ...messages],
+      tools: tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.params } })),
+      tool_choice: 'auto'
+    };
+    // reasoning models of OpenAI itself: think less = fewer (paid) tokens
+    if (o.reasoning && p.id === 'openai' && /^(gpt-5|o\d)/.test(p.model)) b.reasoning_effort = p.effort;
+    return b;
+  },
+  parse(data) {
+    const ch = (data.choices || [])[0] || {};
+    const msg = ch.message || {};
+    const toolCalls = (msg.tool_calls || []).filter(c => c && c.function);
+    const calls = toolCalls.map(c => ({ id: c.id, name: c.function.name, input: safeJson(c.function.arguments) }));
+    const stop = calls.length ? 'tool' : ch.finish_reason === 'length' ? 'max' : ch.finish_reason === 'content_filter' ? 'refusal' : 'end';
+    const text = typeof msg.content === 'string' ? msg.content.trim() : '';
+    const message = { role: 'assistant', content: text || (toolCalls.length ? null : '…') };
+    if (toolCalls.length) message.tool_calls = toolCalls;
+    const u = data.usage || {};
+    return { text, calls, stop, message, usage: { input: u.prompt_tokens || 0, cached: (u.prompt_tokens_details || {}).cached_tokens || 0, output: u.completion_tokens || 0 } };
+  },
+  userTurn: (results, texts) => [
+    ...results.map(r => ({ role: 'tool', tool_call_id: r.id, content: r.content })),
+    ...(texts.length ? [{ role: 'user', content: texts.join('\n\n') }] : [])
+  ],
+  isTurnStart: (m) => m.role === 'user',
+  modelsUrl: (p) => `${p.base}/models`,
+  modelIds: (data) => (data.data || []).map(m => m.id)
+};
+
+const gemini = {
+  url: (p) => `${p.base}/models/${encodeURIComponent(p.model)}:generateContent`,
+  headers: (p) => ({ 'content-type': 'application/json', 'x-goog-api-key': p.key }),
+  body: (p, system, tools, messages) => ({
+    systemInstruction: { parts: [{ text: system }] },
+    contents: messages,
+    tools: [{ functionDeclarations: tools.map(t => ({ name: t.name, description: t.description, parameters: geminiSchema(t.params) })) }],
+    toolConfig: { functionCallingConfig: { mode: 'AUTO' } }
+  }),
+  parse(data) {
+    const cand = (data.candidates || [])[0];
+    const u = data.usageMetadata || {};
+    const usage = { input: u.promptTokenCount || 0, cached: u.cachedContentTokenCount || 0, output: (u.candidatesTokenCount || 0) + (u.thoughtsTokenCount || 0) };
+    if (!cand) return { text: '', calls: [], stop: 'refusal', message: { role: 'model', parts: [{ text: '…' }] }, usage };
+    const parts = (cand.content && cand.content.parts) || [];
+    const calls = parts.filter(x => x.functionCall).map((x, i) => ({
+      id: x.functionCall.id || `gc_${Date.now().toString(36)}_${i}`, gid: x.functionCall.id || null,
+      name: x.functionCall.name, input: x.functionCall.args || {}
+    }));
+    const stop = calls.length ? 'tool' : cand.finishReason === 'MAX_TOKENS' ? 'max' : /SAFETY|BLOCK|PROHIBITED|RECITATION|SPII/.test(cand.finishReason || '') ? 'refusal' : 'end';
+    return {
+      text: parts.filter(x => typeof x.text === 'string' && !x.thought).map(x => x.text).join('\n').trim(), calls, stop,
+      message: { role: 'model', parts: parts.length ? parts : [{ text: '…' }] }, usage
+    };
+  },
+  userTurn: (results, texts) => [{ role: 'user', parts: [
+    ...results.map(r => ({ functionResponse: { name: r.name, response: { result: r.content }, ...(r.gid ? { id: r.gid } : {}) } })),
+    ...texts.map(text => ({ text }))
+  ] }],
+  isTurnStart: (m) => m.role === 'user' && (m.parts || []).every(x => typeof x.text === 'string'),
+  modelsUrl: (p) => `${p.base}/models?pageSize=200`,
+  modelIds: (data) => (data.models || []).filter(m => (m.supportedGenerationMethods || []).includes('generateContent')).map(m => String(m.name).replace(/^models\//, ''))
+};
+
+export const ADAPTERS = { anthropic, openai, gemini };
+export function adapterFor(p = activeProvider()) { return ADAPTERS[p.kind]; }
+
+// ---------------- requests ----------------
+
+function errorText(data) {
+  if (!data) return '';
+  if (typeof data.error === 'string') return data.error;
+  return (data.error && (data.error.message || data.error.status)) || data.message || '';
+}
+
+function niceError(status, raw) {
+  if (status === 401 || status === 403) return `API გასაღები არასწორია ან ამ მოდელზე წვდომა არ აქვს (${status})`;
+  if (status === 402) return 'ანგარიშზე თანხა არ არის (402) — შეავსე ბალანსი სერვისის საიტზე';
+  if (status === 404) return `მოდელი ან მისამართი ვერ მოიძებნა (404) — აირჩიე მოდელი სიიდან (📋). ${raw}`.trim();
+  if (status === 429) return 'ლიმიტი ამოიწურა ან ძალიან ბევრი მოთხოვნაა (429) — სცადე ცოტა ხანში ან შეამოწმე ბალანსი';
+  if (status >= 500) return `სერვისის შეცდომა (${status}) — სცადე მოგვიანებით`;
+  return `შეცდომა ${status}: ${raw}`;
+}
+
+async function request(url, init) {
   let res;
   try {
-    res = await fetch(API_URL, { method: 'POST', headers, body: JSON.stringify(body) });
+    res = await fetch(url, init);
   } catch {
-    throw new Error('ინტერნეტთან კავშირი ვერ მოხერხდა');
+    throw new Error('კავშირი ვერ მოხერხდა — შეამოწმე ინტერნეტი. (ზოგი სერვისი ბრაუზერიდან პირდაპირ კავშირს არ უშვებს — მაშინ სცადე OpenRouter.)');
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const msg = (data && data.error && data.error.message) || '';
-    if (res.status === 400 && useFallbacks && /fallback/i.test(msg)) { useFallbacks = false; return callClaude(messages); }
-    if (res.status === 401) throw new Error('API გასაღები არასწორია (401)');
-    if (res.status === 403) throw new Error('ამ გასაღებს წვდომა არ აქვს (403)');
-    if (res.status === 429) throw new Error('ძალიან ბევრი მოთხოვნა — სცადე ცოტა ხანში (429)');
-    if (res.status >= 500) throw new Error(`Anthropic-ის სერვერის შეცდომა (${res.status}) — სცადე მოგვიანებით`);
-    throw new Error(`შეცდომა ${res.status}: ${msg}`);
+    const raw = errorText(data);
+    const err = new Error(niceError(res.status, raw));
+    err.status = res.status; err.raw = raw;
+    throw err;
   }
   return data;
 }
+
+// Options that a provider/model may refuse; switched off for the session after the first refusal.
+const optional = { fallbacks: true, effort: true, reasoning: true };
+
+/**
+ * One model turn. `conv.messages` is the conversation in the provider's format; it is only
+ * changed by the one-time thinking recovery (Claude). Returns the adapter's parsed answer.
+ */
+export async function callModel(conv, system, tools) {
+  const p = activeProvider();
+  if (!p.key) throw new Error('ჯერ ჩაწერე API გასაღები (ზემოთ)');
+  if (!p.base) throw new Error('ჯერ ჩაწერე სერვისის მისამართი (ზემოთ)');
+  if (!p.model) throw new Error('ჯერ აირჩიე მოდელი (ზემოთ)');
+  const A = adapterFor(p);
+  let stripped = false;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const o = { ...optional };
+    try {
+      const data = await request(A.url(p), { method: 'POST', headers: A.headers(p, o), body: JSON.stringify(A.body(p, system, tools, conv.messages, o)) });
+      return A.parse(data);
+    } catch (e) {
+      if (e.status !== 400) throw e;
+      const raw = String(e.raw || '');
+      if (p.kind === 'anthropic' && optional.fallbacks && /fallback/i.test(raw)) { optional.fallbacks = false; continue; }
+      if (p.kind === 'anthropic' && optional.effort && /effort|output_config/i.test(raw)) { optional.effort = false; continue; }
+      if (p.kind === 'anthropic' && !stripped && /signature|thinking/i.test(raw)) { conv.messages = A.stripThinking(conv.messages); stripped = true; continue; }
+      if (p.kind === 'openai' && optional.reasoning && /reasoning/i.test(raw)) { optional.reasoning = false; continue; }
+      throw e;
+    }
+  }
+  throw new Error('მოთხოვნა ვერ შესრულდა');
+}
+
+/** Models this key can use (also a free connection test — no tokens are spent). */
+export async function listModels() {
+  const p = activeProvider();
+  if (!p.key) throw new Error('ჯერ ჩაწერე API გასაღები');
+  if (!p.base) throw new Error('ჯერ ჩაწერე სერვისის მისამართი');
+  const A = adapterFor(p);
+  const headers = { ...A.headers(p, {}) };
+  delete headers['content-type'];
+  const data = await request(A.modelsUrl(p), { method: 'GET', headers });
+  let ids = A.modelIds(data);
+  if (p.id === 'openai') ids = ids.filter(id => /^(gpt|o\d|chatgpt)/.test(id) && !/audio|realtime|tts|transcribe|image|search|embedding/.test(id));
+  return [...new Set(ids)].sort();
+}
+
+// ---------------- what the model is told once (static, so it stays in the prompt cache) ----------------
+
+export const SYSTEM_PROMPT = `You are the assistant inside "ოჯახის ბიუჯეტი", the family budget web app of Giorgi and Nino (they live in Germany; some money goes to Georgia). Answer in Georgian, short and plain — they are not programmers. No long tables unless asked.
+
+Data model:
+- Month (YYYY-MM): income giorgi/nino (EUR), exchange rate (GEL per 1 EUR), transactions.
+- Categories are dashboard blocks. kind: spend | savings (money moved to savings) | free (personal free money). owner: shared (50/50) | giorgi | nino. Sub-categories roll up into their parent.
+- Every month has its own plan: a target per category (percent of income | amount € | auto = that month's planned bills of the category). set_target changes it from a month on (forward) or for that month only; earlier months never change.
+- Transaction kinds: bill (planned amount; paid amount once paid), envelope = spend-as-you-go budget (food, fuel: budget, used, left), extra = bought with an envelope's money, fromSavings = an expense paid with saved money (lowers the savings balance; the month's transfer to savings stays).
+- Two-step bills: a bill debited from giorgi's or nino's OWN account is first "transferred" (money moved to that account) and later "paid" (the bank debited it). Shared-account bills, savings transfers and envelopes are one step.
+- Templates create each month's bills (cycle in months, first due date).
+- Ids are short: t# transaction, c# category, p# template, "free" = personal free money.
+
+How to work:
+- The selected month's current data comes with the user's message ("DATA"). For anything else call read (free). Never read what you already have.
+- Change data ONLY with tools. Every change is shown to the user as a proposal and runs only after their ✓ — say in one short line what you propose.
+- Do exactly what was asked, with the fewest changes. Never tidy up other entries or targets.
+- "spent X from savings on Y" → spend_from_savings (never edit the savings transfer). "food is all spent" → budget op all_spent. "40 left in fuel went to food" → budget op move. "I moved the money for that bill to my account" → set_status transferred.
+- If something is ambiguous (which month, saving, person), ask one short question instead of guessing.
+- Amounts are EUR unless ₾/lari is said.
+- If numbers do not add up, a screen misled the user or they needed a workaround, call report_issue (what the CODE should do). Mention relevant items from "checks".`;

@@ -76,8 +76,7 @@ function seedState() {
         giorgi: { percent: 5, color: '#7c3aed' },
         nino: { percent: 5, color: '#db2777' }
       },
-      lastBackupAt: null,
-      backupReminderDismissedAt: null
+      lastBackupAt: null
     },
     // Unified category model (v3): a category is ALSO a dashboard block.
     // parentId: null = own dashboard card; 'free' = counts as personal free spending;
@@ -297,7 +296,6 @@ function migrate(raw) {
   raw.settings.accentColor = raw.settings.accentColor || '#2563eb';
   raw.settings.fontScale = raw.settings.fontScale || 'medium';
   if (raw.settings.lastBackupAt === undefined) raw.settings.lastBackupAt = null;
-  if (raw.settings.backupReminderDismissedAt === undefined) raw.settings.backupReminderDismissedAt = null;
   if (!['proportional', 'equal'].includes(raw.settings.contributionSplit)) raw.settings.contributionSplit = 'proportional';
   if (!['actual', 'plan'].includes(raw.settings.contributionBasis)) raw.settings.contributionBasis = 'actual';
   if (typeof raw.settings.rateAuto !== 'boolean') raw.settings.rateAuto = true;
@@ -313,7 +311,7 @@ function migrate(raw) {
     if (!c.goalType) c.goalType = 'max';
     if (c.parentId === undefined) c.parentId = null;
     if (!['shared', 'giorgi', 'nino'].includes(c.owner)) c.owner = 'shared';
-    if (c.targetType !== 'amount') c.targetType = 'percent';
+    if (!['amount', 'auto'].includes(c.targetType)) c.targetType = 'percent'; // v19: keep 'auto' (was reset on every load)
     c.georgiaTransfer = !!c.georgiaTransfer;
   });
   raw.templates = Array.isArray(raw.templates) ? raw.templates : [];
