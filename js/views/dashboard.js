@@ -8,8 +8,9 @@ import {
   computeDashboard, computeMonthOverview, computeRangeOverview, computeRemaining, computeSalarySplit,
   effectiveCardOrder, formatMoney, formatPercent, parseAmountInput, isEnvelope, envelopeSpent, envelopeExtras, envelopeUsed,
   isGeorgia, isSavingsTxn, topIdOf, txnRemainingEur, txnPlannedEur, txnAmountEur, txnPaidEur, FREE_BUCKET_ID, targetEur, familyOf, isExtra,
-  computeSavingsOverview
+  computeSavingsOverview, planFor, isFromSavings, savingsCategories
 } from '../calc.js';
+import { spendFromSavings, envelopeMarkSpent, moveEnvelopeBudget } from '../actions.js';
 import { openModal, undoToast } from '../ui.js';
 import { todayISO } from '../state.js';
 import { t, tx, personName, personTag, genitive, dative } from '../texts.js';
@@ -99,7 +100,8 @@ export function renderDashboard(root) {
     const key = ensureCurrentMonth();
     const state = getState();
     const month = state.months[key];
-    const { categories, settings } = state;
+    // v18: everything on the dashboard uses THIS month's plan (its own copy or the global one)
+    const { categories, settings } = planFor(month, state.categories, state.settings);
     const dash = computeDashboard(month, categories, settings);
 
     cardsWrap.innerHTML = '';
@@ -270,6 +272,7 @@ function summaryCard({ month, categories, settings }) {
   };
   card.appendChild(progressLine('summary.bills', o.bills.paid, o.bills.planned, 'გადახდილი'));
   if (o.budgets.planned > 0.004) card.appendChild(progressLine('summary.budgets', o.budgets.used, o.budgets.planned, 'დახარჯული'));
+  if (o.fromSavings > 0.004) card.appendChild(el('div', { class: 'stat-card__sub tabular-nums', text: `💸 დანაზოგიდან დახარჯული: ${formatMoney(o.fromSavings, 'EUR')} (ხელფასის გეგმაში არ ითვლება)` }));
 
   const m0 = (v) => formatMoney(v, 'EUR', 0);
   const table = el('table', { class: 'split-table summary-table tabular-nums' });
@@ -446,7 +449,7 @@ function billsCategoryCard(b, ctx, owner) {
   const rate = month.exchangeRate;
   const T = (month.income?.giorgi || 0) + (month.income?.nino || 0);
   const inBlock = (tr) => topIdOf(categories, tr.categoryId) === b.id;
-  const isBill = (tr) => inBlock(tr) && !isEnvelope(tr) && !isExtra(tr);
+  const isBill = (tr) => inBlock(tr) && !isEnvelope(tr) && !isExtra(tr) && !isFromSavings(tr);
   const bills = month.transactions.filter(isBill);
   const planned = bills.reduce((s, tr) => s + txnPlannedEur(tr, rate), 0);
   const paid = bills.reduce((s, tr) => s + txnPaidEur(tr, rate), 0);
@@ -471,7 +474,7 @@ function savingsCard(ctx) {
   const { dash, categories, rerender } = ctx;
   const blocks = dash.buckets.filter(b => b.goalType === 'min');
   if (!blocks.length) return [];
-  const so = computeSavingsOverview(ctx.month, categories);
+  const so = computeSavingsOverview(ctx.month, categories, ctx.state.months, ctx.key);
   const open = expanded.has('savings');
   const card = el('div', { class: 'card stat-card stat-card--wide savings-card card--expandable' });
   card.appendChild(el('div', { class: 'stat-card__label', ...tx('card.savings') }));
@@ -485,15 +488,22 @@ function savingsCard(ctx) {
       el('span', { class: 'savings-item__icon', text: done ? '✓' : '⏳' }),
       el('div', { class: 'savings-item__main' }, [
         el('div', { class: 'savings-item__name', text: r.name }),
-        el('div', { class: 'detail-row__meta', text: [personTag(r.owner), TERM[r.term]].filter(Boolean).join(' · ') })
+        el('div', { class: 'detail-row__meta', text: [personTag(r.owner), TERM[r.term],
+          r.withdrawn > 0.004 ? `💸 დაიხარჯა ${m0(r.withdrawn)}` : '',
+          r.balance !== null ? `ნაშთი სულ ${m0(r.balance)}` : ''].filter(Boolean).join(' · ') })
       ]),
       el('div', { class: 'savings-item__amount tabular-nums', text: `${m0(r.done)} / ${m0(r.planned)}` })
     ]));
   });
   card.appendChild(list);
+  // v18: money taken OUT of savings for an expense — one step, no editing of the transfer.
+  const spendBtn = el('button', { type: 'button', class: 'btn btn--secondary btn--sm', text: '💸 დანაზოგიდან დავხარჯე' });
+  spendBtn.addEventListener('click', (e) => { e.stopPropagation(); openSpendFromSavingsDialog(ctx); });
+  card.appendChild(el('div', { class: 'btn-row savings-card__actions' }, [spendBtn]));
   const totals = el('table', { class: 'split-table savings-totals tabular-nums' });
-  totals.appendChild(el('thead', {}, [el('tr', {}, [el('th', { text: '' }), el('th', { text: 'გეგმა' }), el('th', { text: 'გადარიცხული' })])]));
-  const row = (label, x, cls = '') => el('tr', { class: cls }, [el('th', { scope: 'row', text: label }), el('td', { text: m0(x.planned) }), el('td', { text: m0(x.done) })]);
+  const anyOut = so.total.withdrawn > 0.004;
+  totals.appendChild(el('thead', {}, [el('tr', {}, [el('th', { text: '' }), el('th', { text: 'გეგმა' }), el('th', { text: 'გადარიცხული' }), anyOut ? el('th', { text: 'დაიხარჯა' }) : null].filter(Boolean))]));
+  const row = (label, x, cls = '') => el('tr', { class: cls }, [el('th', { scope: 'row', text: label }), el('td', { text: m0(x.planned) }), el('td', { text: m0(x.done) }), anyOut ? el('td', { text: x.withdrawn > 0.004 ? `−${m0(x.withdrawn)}` : '—' }) : null].filter(Boolean));
   totals.appendChild(el('tbody', {}, [
     so.short.planned > 0.004 ? row('მოკლევადიანი', so.short) : null,
     so.long.planned > 0.004 ? row('გრძელვადიანი', so.long) : null,
@@ -585,6 +595,59 @@ function openSavingsTransferDialog(b, ctx) {
           .map(t => { const old = before.find(x => x.id === t.id); if (!old) return t; const c = { ...old }; delete c._u; return c; });
         return d;
       });
+      rerender();
+    });
+    rerender();
+  });
+}
+
+/**
+ * "💸 დანაზოგიდან დავხარჯე" (v18): an expense paid with saved money. Recorded as a paid
+ * expense in the chosen category and subtracted from that saving's balance — the month's
+ * transfer stays as it was (no more editing the transfer by hand).
+ */
+function openSpendFromSavingsDialog(ctx) {
+  const { key, categories, rerender, state } = ctx;
+  const savs = savingsCategories(categories);
+  if (!savs.length) { toast('დანაზოგის კატეგორია არ არის', 'error'); return; }
+  const balances = computeSavingsOverview(ctx.month, categories, state.months, key).items;
+  const form = el('form', {});
+  form.appendChild(el('p', { class: 'card__sub', text: 'ხარჯი ჩაიწერება გადახდილად და დააკლდება არჩეული დანაზოგის ნაშთს. ამ თვის გადარიცხვა უცვლელი რჩება.' }));
+  const from = el('select', {}, savs.map(c => {
+    const b = balances.find(x => x.id === c.id);
+    return el('option', { value: c.id, text: `${c.name} · ${personTag(c.owner || 'shared')}${b && b.balance !== null ? ` (ნაშთი ${formatMoney(b.balance, 'EUR', 0)})` : ''}` });
+  }));
+  const name = el('input', { type: 'text', placeholder: 'რაში (მაგ. მანქანის შეკეთება)', maxlength: '80' });
+  const amount = el('input', { type: 'text', inputmode: 'decimal', placeholder: '0,00' });
+  const spendCats = categories.filter(c => !savs.some(s => s.id === c.id));
+  const cat = el('select', {}, spendCats.map(c => el('option', { value: c.id, text: `${c.parentId && c.parentId !== FREE_BUCKET_ID ? '↳ ' : ''}${c.name}` })));
+  const ess = spendCats.find(c => c.id === 'cat_essentials') || spendCats[0];
+  if (ess) cat.value = ess.id;
+  form.append(
+    el('div', { class: 'field' }, [el('label', { text: 'რომელი დანაზოგიდან' }), from]),
+    el('div', { class: 'field' }, [el('label', { text: 'რაში დაიხარჯა' }), name]),
+    el('div', { class: 'field-row' }, [
+      el('div', { class: 'field' }, [el('label', { text: 'თანხა (€)' }), amount]),
+      el('div', { class: 'field' }, [el('label', { text: 'ხარჯის კატეგორია' }), cat])
+    ])
+  );
+  form.appendChild(el('div', { class: 'btn-row' }, [el('button', { class: 'btn btn--primary', type: 'submit', text: '✓ ჩაწერა' })]));
+  const { close } = openModal(form, { title: '💸 დანაზოგიდან ხარჯი' });
+  setTimeout(() => name.focus(), 50);
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    let msg = '';
+    let newId = null;
+    try {
+      updateState(d => {
+        msg = spendFromSavings(d, key, { savingsCategoryId: from.value, amount: parseAmountInput(amount.value), name: name.value.trim() || 'დანაზოგიდან ხარჯი', categoryId: cat.value });
+        newId = d.months[key].transactions[d.months[key].transactions.length - 1].id;
+        return d;
+      });
+    } catch (err) { toast(err.message, 'error'); return; }
+    close();
+    undoToast(msg, () => {
+      updateState(d => { d.months[key].transactions = d.months[key].transactions.filter(t => t.id !== newId); return d; });
       rerender();
     });
     rerender();
@@ -718,7 +781,7 @@ function dueCard(ctx) {
   const card = el('div', { class: 'card stat-card stat-card--wide due-card' });
   card.appendChild(el('div', { class: 'stat-card__label', ...tx('card.due') }));
   card.appendChild(el('div', { class: 'stat-card__value tabular-nums', text: formatMoney(rem.bills, 'EUR') }));
-  const isBill = (tr) => !isEnvelope(tr) && !isExtra(tr) && !isSavingsTxn(tr, ctx.categories);
+  const isBill = (tr) => !isEnvelope(tr) && !isExtra(tr) && !isFromSavings(tr) && !isSavingsTxn(tr, ctx.categories);
   if (rem.bills <= 0.004) {
     if (month.transactions.some(isBill)) markDone(card, 'ყველა გადასახადი გადახდილია');
     else card.appendChild(el('div', { class: 'stat-card__sub', text: 'ამ თვეში გადასახადები ჯერ არ არის.' }));
@@ -758,19 +821,101 @@ function envelopesCard({ month, key, rerender }) {
     }
     const add = el('button', { class: 'icon-btn icon-btn--sm envelope-row__add', type: 'button', 'aria-label': `${t.name}: ხარჯის ან ნაშთის ჩაწერა`, text: '＋' });
     add.addEventListener('click', () => openEnvelopeDialog(t.id, rerender));
+    // v18: "it's all spent" in one tap (amount editable) — no need to type every receipt
+    const doneBtn = !t.paid && left > 0.5 ? el('button', { class: 'icon-btn icon-btn--sm envelope-row__add', type: 'button', 'aria-label': `${t.name}: დარჩენილი დახარჯულად`, title: 'დარჩენილი — დახარჯულად', text: '✓' }) : null;
+    if (doneBtn) doneBtn.addEventListener('click', () => openMarkSpentDialog(key, t, left, rerender));
     const row = el('div', { class: 'envelope-row' + (t.paid ? ' envelope-row--closed' : '') }, [
       el('div', { class: 'envelope-row__main' }, [
         el('div', { class: 'envelope-row__top' }, [
           el('span', { class: 'envelope-row__name', text: t.name }),
           el('span', { class: 'tabular-nums' + (left < -0.004 ? ' text-danger' : ''), text: t.paid ? 'დახურულია' : `დარჩა ${formatMoney(left, t.currency, 0)} / ${formatMoney(t.amountPlanned, t.currency, 0)}${perDay}${extrasFromIt > 0 ? ` · 🧺 ${formatMoney(extrasFromIt, t.currency, 0)}` : ''}` })
         ]),
-        progressBar(pct, left < -0.004 ? 'var(--danger)' : undefined)
+        progressBar(pct, left < -0.004 ? 'var(--danger)' : undefined),
+        (t.moves || []).length ? el('div', { class: 'stat-card__sub tabular-nums', text: (t.moves || []).map(mv => {
+          const other = envs.find(x => x.id === mv.other);
+          return mv.amount < 0 ? `⇄ ${formatMoney(-mv.amount, t.currency, 0)} → ${other ? other.name : '?'}` : `⇄ +${formatMoney(mv.amount, t.currency, 0)} ← ${other ? other.name : '?'}`;
+        }).join(' · ') }) : null
       ]),
-      add
+      el('div', { class: 'envelope-row__btns' }, [add, doneBtn])
     ]);
     card.appendChild(row);
   });
+  if (envs.length > 1) {
+    const moveBtn = el('button', { type: 'button', class: 'btn btn--ghost btn--sm', text: '⇄ ნაშთის გადატანა ერთიდან მეორეში' });
+    moveBtn.addEventListener('click', () => openMoveBudgetDialog(key, envs, month, rerender));
+    card.appendChild(el('div', { class: 'btn-row' }, [moveBtn]));
+  }
   return card;
+}
+
+/** "✓ დახარჯულად": the rest of a budget (or a chosen part of it) counts as spent. */
+function openMarkSpentDialog(key, env, left, rerender) {
+  const form = el('form', {});
+  form.appendChild(el('p', { class: 'card__sub', text: `„${env.name}"-ში დარჩენილია ${formatMoney(left, env.currency)}. რამდენი ჩაითვალოს დახარჯულად? (ცალკეული ქვითრების შეყვანა საჭირო არაა)` }));
+  const input = el('input', { type: 'text', inputmode: 'decimal', value: (Math.round(left * 100) / 100).toFixed(2).replace('.', ',') });
+  form.appendChild(el('div', { class: 'field' }, [el('label', { text: `დახარჯული (${env.currency === 'GEL' ? '₾' : '€'})` }), input]));
+  form.appendChild(el('div', { class: 'btn-row' }, [el('button', { class: 'btn btn--primary', type: 'submit', text: '✓ დახარჯულად' })]));
+  const { close } = openModal(form, { title: `🛒 ${env.name}` });
+  setTimeout(() => input.select(), 50);
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    let msg = '', spId = null;
+    try {
+      updateState(d => {
+        msg = envelopeMarkSpent(d, key, { envelopeId: env.id, amount: parseAmountInput(input.value) });
+        const tr = d.months[key].transactions.find(x => x.id === env.id);
+        spId = tr.spends[tr.spends.length - 1].id;
+        return d;
+      });
+    } catch (err) { toast(err.message, 'error'); return; }
+    close();
+    undoToast(msg, () => {
+      updateState(d => { const tr = d.months[key].transactions.find(x => x.id === env.id); if (tr) tr.spends = (tr.spends || []).filter(s => s.id !== spId); return d; });
+      rerender();
+    });
+    rerender();
+  });
+}
+
+/** "⇄": move a left-over amount from one budget to another (this month only). */
+function openMoveBudgetDialog(key, envs, month, rerender) {
+  const leftOf = (e) => Math.max(0, (e.amountPlanned || 0) - envelopeUsed(e, month.transactions, month.exchangeRate));
+  const form = el('form', {});
+  form.appendChild(el('p', { class: 'card__sub', text: 'მაგ.: საწვავში დარჩენილი 40 € კვებაზე დაიხარჯა (იგივე ანგარიშიდან). გეგმა იცვლება მხოლოდ ამ თვეში, ჯამი იგივე რჩება.' }));
+  const opt = (e) => el('option', { value: e.id, text: `${e.name} (დარჩა ${formatMoney(leftOf(e), e.currency, 0)})` });
+  const fromSel = el('select', {}, envs.map(opt));
+  const toSel = el('select', {}, envs.map(opt));
+  const best = envs.slice().sort((a, b) => leftOf(b) - leftOf(a))[0];
+  fromSel.value = best.id;
+  toSel.value = (envs.find(e => e.id !== best.id) || envs[0]).id;
+  const amount = el('input', { type: 'text', inputmode: 'decimal' });
+  const syncAmount = () => { const e = envs.find(x => x.id === fromSel.value); amount.value = leftOf(e).toFixed(2).replace('.', ','); };
+  fromSel.addEventListener('change', syncAmount);
+  syncAmount();
+  form.append(
+    el('div', { class: 'field' }, [el('label', { text: 'საიდან (სადაც დარჩა)' }), fromSel]),
+    el('div', { class: 'field' }, [el('label', { text: 'სად (სადაც დაიხარჯა)' }), toSel]),
+    el('div', { class: 'field' }, [el('label', { text: 'თანხა' }), amount]),
+    el('div', { class: 'btn-row' }, [el('button', { class: 'btn btn--primary', type: 'submit', text: '⇄ გადატანა' })])
+  );
+  const { close } = openModal(form, { title: '⇄ ბიუჯეტის გადატანა' });
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const before = JSON.parse(JSON.stringify(getState().months[key].transactions.filter(x => x.id === fromSel.value || x.id === toSel.value)));
+    let msg = '';
+    try {
+      updateState(d => { msg = moveEnvelopeBudget(d, key, { fromId: fromSel.value, toId: toSel.value, amount: parseAmountInput(amount.value) }); return d; });
+    } catch (err) { toast(err.message, 'error'); return; }
+    close();
+    undoToast(msg, () => {
+      updateState(d => {
+        d.months[key].transactions = d.months[key].transactions.map(x => { const o = before.find(b => b.id === x.id); if (!o) return x; const c = { ...o }; delete c._u; return c; });
+        return d;
+      });
+      rerender();
+    });
+    rerender();
+  });
 }
 
 // ---------------- Salary split / transfer plan ----------------

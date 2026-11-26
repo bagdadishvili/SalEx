@@ -3,11 +3,13 @@
 // It can also be counted inside another category, or as personal free spending.
 
 import { getState, updateState, FREE_BUCKET_ID } from '../state.js';
-import { formatPercent, formatMoney, parseAmountInput, targetEur, targetPct, sumAllPercents, totalIncome } from '../calc.js';
+import { formatPercent, formatMoney, parseAmountInput, targetEur, targetPct, sumAllPercents, totalIncome, planFor, categoryPlannedEur } from '../calc.js';
 import { getSelectedMonth, monthLabel } from '../monthNav.js';
 import { el, openModal, confirmDialog, toast } from '../ui.js';
 import { personTag } from '../texts.js';
-import { pickColor, COLOR_PRESETS, freePseudoCategory, PAYER_LABELS } from '../components.js';
+import { pickColor, COLOR_PRESETS, freePseudoCategory, PAYER_LABELS, renderMonthNav } from '../components.js';
+import { setPlanTarget, planInMonth } from '../plan.js';
+import { initMonth } from '../monthEngine.js';
 
 function uid(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -32,6 +34,8 @@ export function renderCategories(root) {
   const container = el('div', { class: 'categories-view' });
   root.appendChild(container);
 
+  // The plan is per month (v18): pick which month you are planning.
+  container.appendChild(renderMonthNav(() => draw()));
   const addBtn = el('button', { class: 'btn btn--primary', text: '+ ახალი კატეგორია' });
   container.appendChild(el('div', { class: 'btn-row' }, [addBtn]));
 
@@ -81,7 +85,11 @@ export function renderCategories(root) {
           el('span', { text: cat.name })
         ]),
         el('div', { class: 'row__meta' }, [
-          cat.parentId !== FREE_BUCKET_ID ? el('span', { class: 'chip', text: `${cat.targetType === 'amount' ? formatMoney(cat.amount, 'EUR', 0) : formatPercent(cat.percent)}${isTop ? ` · ${cat.goalType === 'min' ? 'მინ.' : 'მაქს.'}` : ''}` }) : null,
+          cat.parentId !== FREE_BUCKET_ID ? (() => {
+            const pc = planInMonth(state, { cat: cat.id }, getSelectedMonth());
+            const v = pc.targetType === 'auto' ? 'ავტო' : pc.targetType === 'amount' ? formatMoney(pc.amount, 'EUR', 0) : formatPercent(pc.percent);
+            return el('span', { class: 'chip', text: `${v}${isTop ? ` · ${cat.goalType === 'min' ? 'მინ.' : 'მაქს.'}` : ''}` });
+          })() : null,
           el('span', { class: 'chip chip--account', title: 'ვისია', text: personTag(cat.owner || 'shared') }),
           pLabel ? el('span', { class: 'chip', text: pLabel }) : null,
           el('span', { text: String(count) + ' ჩანაწ.' })
@@ -133,6 +141,18 @@ function fmtNum(v) {
  * "📊 გეგმა": every category's target in one place — as % of income OR as € — with the other
  * value calculated live, both people's free money, and the 100 % check.
  */
+// Where a plan change applies (v18): from the selected month on, or that month only.
+let planScope = 'forward';
+
+/** Saves a target for the selected month with the chosen scope (older months keep theirs). */
+function saveTarget(key, ref, cfg) {
+  updateState(d => {
+    if (!d.months[key]) initMonth(d, key);
+    setPlanTarget(d, ref, cfg, key, planScope);
+    return d;
+  });
+}
+
 function renderPlan(wrap, redraw) {
   const state = getState();
   const key = getSelectedMonth();
@@ -140,11 +160,22 @@ function renderPlan(wrap, redraw) {
   const T = month ? totalIncome(month) : 0;
   wrap.innerHTML = '';
   const card = el('div', { class: 'card plan-card' });
-  card.appendChild(el('div', { class: 'card__title', text: '📊 გეგმა — რამდენი რისთვის' }));
+  card.appendChild(el('div', { class: 'card__title', text: `📊 გეგმა — ${monthLabel(key)}` }));
   card.appendChild(el('p', { class: 'card__sub', text: T > 0
-    ? `ჩაწერე პროცენტი ან თანხა (€) — მეორე თავისით დაითვლება ${monthLabel(key)}-ის შემოსავლით (${formatMoney(T, 'EUR', 0)}). ათწილადებიც შეიძლება (მაგ. 12,5).`
+    ? `ჩაწერე პროცენტი, თანხა (€) ან „ავტო" — მეორე თავისით დაითვლება ${monthLabel(key)}-ის შემოსავლით (${formatMoney(T, 'EUR', 0)}). ათწილადებიც შეიძლება (მაგ. 12,5).`
     : 'ჩაწერე პროცენტი ან თანხა (€). ამ თვეს შემოსავალი ჯერ არ აქვს ჩაწერილი — პროცენტი ↔ თანხის გადათვლა გამოჩნდება, როცა დეშბორდზე ხელფასებს ჩაწერ.' }));
 
+  // Scope: a change applies from this month on (default) or to this month only. Earlier months never change.
+  const scopeRow = el('div', { class: 'segmented plan-scope', role: 'tablist' });
+  [['forward', `${monthLabel(key)}-დან და შემდეგ`], ['only', `მხოლოდ ${monthLabel(key)}`]].forEach(([v, label]) => {
+    const b = el('button', { type: 'button', class: 'segmented__btn', 'aria-pressed': String(planScope === v), text: label });
+    b.addEventListener('click', () => { planScope = v; redraw(); });
+    scopeRow.appendChild(b);
+  });
+  card.appendChild(scopeRow);
+  card.appendChild(el('p', { class: 'card__sub', text: 'ცვლილება წინა თვეებს აღარ ეხება — ისინი ინარჩუნებენ თავის გეგმას.' }));
+
+  const resolved = month ? planFor(month, state.categories, state.settings) : { categories: state.categories, settings: state.settings };
   const rows = el('div', { class: 'plan-rows' });
   const ordered = [];
   state.categories.filter(c => !c.parentId).forEach(top => {
@@ -154,66 +185,99 @@ function renderPlan(wrap, redraw) {
   const sumEl = el('div', { class: 'sum-indicator' });
   const updateSum = () => {
     const fresh = getState();
-    const sum = sumAllPercents(fresh.settings, fresh.categories, T);
+    const fm = fresh.months[key];
+    const r = fm ? planFor(fm, fresh.categories, fresh.settings) : fresh;
+    const sum = sumAllPercents(r.settings, r.categories, T);
     const ok = Math.abs(sum - 100) < 0.05;
     const diff = Math.round((100 - sum) * 10) / 10;
     sumEl.textContent = ok ? `ჯამი: 100 % ✓` : `ჯამი: ${formatPercent(sum)} — ${diff > 0 ? 'აკლია' : 'მეტია'} ${formatPercent(Math.abs(diff))}${T > 0 ? ` (≈ ${formatMoney(Math.abs(diff) * T / 100, 'EUR', 0)})` : ''}`;
     sumEl.className = 'sum-indicator ' + (ok ? 'sum-indicator--ok' : 'sum-indicator--bad');
   };
 
-  const addRow = (label, depth, color, cfg, save) => {
+  const addRow = ({ label, depth, color, owner, cfg, ref, canAuto, plannedHere, isSaving }) => {
     const isAmt = cfg.targetType === 'amount';
-    const input = el('input', { type: 'text', inputmode: 'decimal', class: 'plan-input tabular-nums', value: fmtNum(isAmt ? cfg.amount : cfg.percent), 'aria-label': `${label} — მიზანი` });
-    const unit = el('select', { class: 'plan-unit', 'aria-label': 'ერთეული' }, [el('option', { value: 'percent', text: '%' }), el('option', { value: 'amount', text: '€' })]);
-    unit.value = isAmt ? 'amount' : 'percent';
+    const isAuto = cfg.targetType === 'auto';
+    const input = el('input', { type: 'text', inputmode: 'decimal', class: 'plan-input tabular-nums', value: fmtNum(isAmt ? cfg.amount : isAuto ? plannedHere : cfg.percent), 'aria-label': `${label} — მიზანი` });
+    const unit = el('select', { class: 'plan-unit', 'aria-label': 'ერთეული' }, [
+      el('option', { value: 'percent', text: '%' }), el('option', { value: 'amount', text: '€' }),
+      canAuto ? el('option', { value: 'auto', text: 'ავტო' }) : null
+    ].filter(Boolean));
+    unit.value = isAuto ? 'auto' : isAmt ? 'amount' : 'percent';
+    input.disabled = isAuto;
     const other = el('span', { class: 'plan-other tabular-nums' });
     const calc = () => {
+      if (unit.value === 'auto') { other.textContent = T > 0 ? `= ${formatPercent(plannedHere / T * 100)}` : ''; return; }
       const v = parseAmountInput(input.value, 2);
       const tmp = unit.value === 'amount' ? { targetType: 'amount', amount: v } : { targetType: 'percent', percent: v };
       other.textContent = unit.value === 'amount' ? (T > 0 ? `= ${formatPercent(targetPct(tmp, T))}` : '') : (T > 0 ? `= ${formatMoney(targetEur(tmp, T), 'EUR', 0)}` : '');
     };
     const commit = () => {
+      if (unit.value === 'auto') { saveTarget(key, ref, { targetType: 'auto' }); updateSum(); return; }
       const v = parseAmountInput(input.value, 2);
-      save(unit.value, v);
+      saveTarget(key, ref, unit.value === 'amount' ? { targetType: 'amount', amount: v } : { targetType: 'percent', percent: v });
       updateSum();
     };
     input.addEventListener('input', calc);
     input.addEventListener('change', commit);
+    let prevUnit = unit.value;
     unit.addEventListener('change', () => {
-      // Switching unit keeps the same money: convert the shown value.
-      const v = parseAmountInput(input.value, 2);
-      if (T > 0) input.value = fmtNum(unit.value === 'amount' ? v * T / 100 : v / T * 100);
+      const now = unit.value;
+      if (now === 'auto') input.value = fmtNum(plannedHere);
+      else {
+        // Switching unit keeps the same money: convert the shown value ('auto' shows €).
+        const was = prevUnit === 'auto' ? 'amount' : prevUnit;
+        const v = parseAmountInput(input.value, 2);
+        if (T > 0 && was !== now) input.value = fmtNum(now === 'amount' ? v * T / 100 : v / T * 100);
+      }
+      input.disabled = now === 'auto';
+      prevUnit = now;
       calc(); commit();
     });
     calc();
+    // The link to real money: what this month's entries of this category add up to.
+    const hint = isSaving ? `ამ თვეში ჩანაწერებით: ${formatMoney(plannedHere, 'EUR', 0)}` : `ამ თვის ხარჯები: ${formatMoney(plannedHere, 'EUR', 0)}`;
     rows.appendChild(el('div', { class: 'plan-row' + (depth ? ' plan-row--child' : '') }, [
-      el('span', { class: 'plan-row__name' }, [el('span', { class: 'color-dot', style: `background:${color}` }), ` ${depth ? '↳ ' : ''}${label}`]),
+      el('span', { class: 'plan-row__name' }, [
+        el('span', { class: 'color-dot', style: `background:${color}` }), ` ${depth ? '↳ ' : ''}${label}`,
+        owner ? el('span', { class: 'chip chip--account plan-row__owner', 'data-noedit': '', text: personTag(owner) }) : null,
+        ref.cat ? el('span', { class: 'plan-row__hint tabular-nums', 'data-noedit': '', text: hint }) : null
+      ]),
       el('span', { class: 'plan-row__inputs' }, [input, unit]),
       other
     ]));
   };
 
-  ordered.forEach(([c, depth]) => addRow(c.name, depth, c.color, c, (type, v) => updateState(d => {
-    const x = d.categories.find(k => k.id === c.id);
-    x.targetType = type;
-    if (type === 'amount') x.amount = v; else x.percent = v;
-    return d;
-  })));
-  ['giorgi', 'nino'].forEach(p => {
-    const cfg = state.settings.planFree[p];
-    addRow(`🛍 თავისუფალი (${PAYER_LABELS[p]})`, 0, cfg.color, cfg, (type, v) => updateState(d => {
-      const x = d.settings.planFree[p];
-      x.targetType = type;
-      if (type === 'amount') x.amount = v; else x.percent = v;
-      return d;
-    }));
+  ordered.forEach(([c, depth]) => {
+    const ref = { cat: c.id };
+    const cfg = planInMonth(state, ref, key);
+    const top = depth ? state.categories.find(x => x.id === c.parentId) : c;
+    const isSaving = !!top && top.goalType === 'min';
+    addRow({
+      label: c.name, depth, color: c.color, owner: c.owner || 'shared', cfg, ref,
+      canAuto: true, isSaving,
+      plannedHere: month ? categoryPlannedEur(month, c.id) : 0
+    });
   });
+  ['giorgi', 'nino'].forEach(p => {
+    const ref = { free: p };
+    addRow({ label: `🛍 თავისუფალი`, depth: 0, color: state.settings.planFree[p].color, owner: p, cfg: planInMonth(state, ref, key), ref, canAuto: false, plannedHere: 0 });
+  });
+  void resolved;
   card.appendChild(rows);
   card.appendChild(sumEl);
-  card.appendChild(el('p', { class: 'card__sub', text: '„↳" ქვეკატეგორიის მიზანი ემატება თავისი ბლოკის ჯამს დეშბორდზე, მაგრამ ხელფასის განაწილებაში ითვლება მისი „ვისია"-ს მიხედვით (მაგ. ნინოს დანაზოგი — ნინოს წილში).' }));
+  card.appendChild(el('details', { class: 'help-details plan-help' }, [
+    el('summary', { text: '🔗 როგორ არის დაკავშირებული გეგმა, კატეგორიები და დეშბორდი' }),
+    el('ul', { class: 'plan-help__list' }, [
+      el('li', { text: 'კატეგორია = დეშბორდის ბლოკი. ყოველი ხარჯი/შაბლონი ერთ კატეგორიას ეკუთვნის, „↳" ქვეკატეგორიები თავის ბლოკში იკრიბება.' }),
+      el('li', { text: 'გეგმა (აქ) = რამდენი უნდა წავიდეს თითო კატეგორიაზე ამ თვეში. „ამ თვის ხარჯები" = რეალურად ჩაწერილი/შაბლონებიდან მოსული ხარჯები.' }),
+      el('li', { text: '„ავტო" = გეგმა ავტომატურად უდრის ამ თვის ხარჯებს (მაგ. „აუცილებელი" — თვის მომზადებისას შაბლონებიდან მოსული გადასახადები). ხელით ჩაწერა აღარ სჭირდება.' }),
+      el('li', { text: 'დანაზოგი („მინ.") — გეგმა = რამდენი უნდა გადაირიცხოს; დეშბორდის 💰 ბარათი აჩვენებს „გადარიცხული / გეგმა" და ნაშთს.' }),
+      el('li', { text: 'ხელფასის განაწილება (💸) და თვის მიმოხილვა ითვლის ამ თვის გეგმით, თითო კატეგორიის „ვისია"-ს მიხედვით (👨 გიორგი / 👩 ნინო / 👥 საერთო 50/50).' }),
+      el('li', { text: 'ყოველ თვეს თავისი გეგმა აქვს: ცვლილება ეხება არჩეულ თვეს (და, თუ ასე აირჩიე, შემდეგ თვეებს). წინა თვეები არ იცვლება.' })
+    ])
+  ]));
   updateSum();
   wrap.appendChild(card);
-  void redraw;
 }
 
 function openCategoryForm(existing, onSaved) {
@@ -232,12 +296,15 @@ function openCategoryForm(existing, onSaved) {
     .forEach(c => parentSelect.appendChild(el('option', { value: c.id, text: `↳ ჩაითვალოს „${c.name}"-ის ჯამში` })));
   parentSelect.value = existing?.parentId || '';
 
-  // Target: % of income OR a fixed € amount (decimals allowed); also for sub-categories.
-  const isAmount = existing?.targetType === 'amount';
-  const percentInput = el('input', { type: 'text', inputmode: 'decimal', value: fmtNum(isAmount ? existing?.amount : existing?.percent) });
-  const unitSelect = el('select', { class: 'unit-select' }, [el('option', { value: 'percent', text: '% შემოსავლიდან' }), el('option', { value: 'amount', text: '€ თვეში' })]);
-  unitSelect.value = isAmount ? 'amount' : 'percent';
-  const percentField = el('div', { class: 'field' }, [el('label', { text: 'მიზანი (გეგმა) — პროცენტით ან კონკრეტული თანხით' }), el('div', { class: 'target-row' }, [percentInput, unitSelect])]);
+  // Target: % of income OR a fixed € amount (decimals allowed) OR 'auto'; also for sub-categories.
+  // v18: shown and saved for the SELECTED month (and the months after it) — earlier months keep theirs.
+  const key = getSelectedMonth();
+  const cur = existing ? planInMonth(state, { cat: existing.id }, key) : { targetType: 'percent', percent: 0, amount: null };
+  const isAmount = cur.targetType === 'amount';
+  const percentInput = el('input', { type: 'text', inputmode: 'decimal', value: fmtNum(isAmount ? cur.amount : cur.percent) });
+  const unitSelect = el('select', { class: 'unit-select' }, [el('option', { value: 'percent', text: '% შემოსავლიდან' }), el('option', { value: 'amount', text: '€ თვეში' }), el('option', { value: 'auto', text: 'ავტო (ამ თვის ხარჯებიდან)' })]);
+  unitSelect.value = cur.targetType === 'auto' ? 'auto' : isAmount ? 'amount' : 'percent';
+  const percentField = el('div', { class: 'field' }, [el('label', { text: `მიზანი (გეგმა) — ${monthLabel(key)}-დან; წინა თვეები არ იცვლება` }), el('div', { class: 'target-row' }, [percentInput, unitSelect])]);
 
   const goalSelect = el('select', {}, [
     el('option', { value: 'max', text: 'მაქს. (ხარჯი — ამაზე მეტი არ)' }),
@@ -297,14 +364,21 @@ function openCategoryForm(existing, onSaved) {
     if (!name) { toast('შეავსეთ სახელი', 'error'); return; }
     const parentId = parentSelect.value || null;
     const val = parentId === FREE_BUCKET_ID ? 0 : parseAmountInput(percentInput.value, 2);
-    const targetType = unitSelect.value === 'amount' ? 'amount' : 'percent';
-    const percent = targetType === 'percent' ? val : (existing?.percent || 0);
-    const amount = targetType === 'amount' ? val : (existing?.amount ?? null);
+    const targetType = ['amount', 'auto'].includes(unitSelect.value) ? unitSelect.value : 'percent';
+    const percent = targetType === 'percent' ? val : (cur.percent || 0);
+    const amount = targetType === 'amount' ? val : (cur.amount ?? null);
+    const newCfg = { targetType, percent, amount };
+    const targetChanged = isEdit && JSON.stringify({ targetType: cur.targetType, percent: cur.percent || 0, amount: cur.amount ?? null }) !== JSON.stringify(newCfg);
 
     updateState(draft => {
       if (isEdit) {
         const c = draft.categories.find(x => x.id === existing.id);
-        Object.assign(c, { name, parentId, percent, amount, targetType, goalType: goalSelect.value, color, georgiaTransfer: false, owner: ownerSelect.value, term: termSelect.value || null });
+        Object.assign(c, { name, parentId, goalType: goalSelect.value, color, georgiaTransfer: false, owner: ownerSelect.value, term: termSelect.value || null });
+        // the target goes through the per-month plan: from the selected month on, older months untouched
+        if (targetChanged) {
+          if (!draft.months[key]) initMonth(draft, key);
+          setPlanTarget(draft, { cat: c.id }, newCfg, key, 'forward');
+        }
         if (parentId) {
           // No longer a top-level block — drop from dashboard order.
           draft.settings.dashboardCardOrder = draft.settings.dashboardCardOrder.filter(k => k !== c.id);

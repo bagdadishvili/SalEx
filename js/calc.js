@@ -15,15 +15,67 @@ export function gelToEur(amountGel, rate) {
 /** Target in € for a category / free-money config, given the month's total income T. */
 export function targetEur(cfg, T) {
   if (!cfg) return 0;
-  if (cfg.targetType === 'amount') return Number(cfg.amount) || 0;
+  if (cfg.targetType === 'amount' || cfg.targetType === 'auto') return Number(cfg.amount) || 0;
   return (T || 0) * (Number(cfg.percent) || 0) / 100;
 }
 
 /** Target in % of income for a category / free-money config. */
 export function targetPct(cfg, T) {
   if (!cfg) return 0;
-  if (cfg.targetType === 'amount') return T > 0 ? ((Number(cfg.amount) || 0) / T) * 100 : 0;
+  if (cfg.targetType === 'amount' || cfg.targetType === 'auto') return T > 0 ? ((Number(cfg.amount) || 0) / T) * 100 : 0;
   return Number(cfg.percent) || 0;
+}
+
+// ---- Plan per month (v18) ----
+// The plan (each category's target, both people's free money) used to be ONE global setting,
+// so changing December's savings also rewrote November. Now a month can keep its own copy:
+// month.plan = { cats: { <catId>: {targetType, percent, amount} }, free: { giorgi: {…}, nino: {…} } }.
+// A month without an entry uses the global value. targetType 'auto' = "this month's planned
+// expenses of that category" (e.g. "აუცილებელი" follows the generated bills by itself).
+
+const PLAN_KEYS = ['targetType', 'percent', 'amount'];
+
+/** Only the plan fields of a target config. */
+export function planCfg(cfg) {
+  const out = {};
+  PLAN_KEYS.forEach(k => { if (cfg && cfg[k] !== undefined) out[k] = cfg[k]; });
+  return out;
+}
+
+/** Planned € of a category's own transactions in a month (what 'auto' resolves to). */
+export function categoryPlannedEur(month, catId) {
+  if (!month) return 0;
+  return (month.transactions || []).filter(t => t.categoryId === catId && !isExtra(t) && !isFromSavings(t))
+    .reduce((s, t) => s + txnPlannedEur(t, month.exchangeRate), 0);
+}
+
+/**
+ * The categories and settings as they apply to ONE month: its own plan copy where it has one,
+ * 'auto' targets resolved to this month's planned amount. Pure and idempotent.
+ */
+export function planFor(month, categories, settings) {
+  const p = (month && month.plan) || {};
+  const pc = p.cats || {};
+  const resolve = (base, own, catId) => {
+    let x = own ? { ...base, ...planCfg(own) } : base;
+    if (x && x.targetType === 'auto') {
+      x = { ...x, amount: catId ? Math.round(categoryPlannedEur(month, catId) * 100) / 100 : (Number(x.amount) || 0) };
+    }
+    return x;
+  };
+  const cats = (categories || []).map(c => {
+    const own = pc[c.id];
+    if (!own && c.targetType !== 'auto') return c;
+    return resolve(c, own, c.id);
+  });
+  let s = settings;
+  if (settings && settings.planFree) {
+    const pf = p.free || {};
+    const free = {};
+    ['giorgi', 'nino'].forEach(k => { free[k] = resolve(settings.planFree[k] || {}, pf[k], null); });
+    s = { ...settings, planFree: free };
+  }
+  return { categories: cats, settings: s };
 }
 
 /** All categories that roll up into `top` (the top itself + its sub-categories, any depth). */
@@ -38,6 +90,15 @@ export function familyOf(categories, top) {
 
 export function isExtra(txn) {
   return !!txn && txn.kind === 'extra';
+}
+
+// ---- Spent from savings (v18): a real expense paid with money that was already saved ----
+// kind 'fromSavings', fromSavings = the savings category it came out of, categoryId = what it
+// was spent on. Paid at once; planned 0 (the salary does not fund it); it lowers the savings
+// balance, while the month's "transferred to savings" stays what was really transferred.
+
+export function isFromSavings(txn) {
+  return !!txn && txn.kind === 'fromSavings';
 }
 
 // ---- Envelopes ("ბიუჯეტი": food, fuel…) — a planned amount that is spent gradually ----
@@ -83,7 +144,7 @@ export function txnPaidEur(txn, monthRate) {
  * Pass the month's transactions so extras bought from an envelope lower what is left in it.
  */
 export function txnRemainingEur(txn, monthRate, txns = null) {
-  if (isExtra(txn)) return 0;
+  if (isExtra(txn) || isFromSavings(txn)) return 0;
   if (isEnvelope(txn)) {
     if (txn.paid) return 0; // envelope closed for the month
     return Math.max(0, toEur((txn.amountPlanned || 0) - envelopeUsed(txn, txns, monthRate), txn, monthRate));
@@ -105,6 +166,7 @@ export function txnAmountEur(txn, monthRate) {
 /** Planned amount of a transaction in EUR (always uses amountPlanned, current month rate for GEL). */
 export function txnPlannedEur(txn, monthRate) {
   if (isExtra(txn) && txn.fromEnvelope) return 0;
+  if (isFromSavings(txn)) return 0;
   if (txn.currency === 'GEL') return gelToEur(txn.amountPlanned, monthRate);
   return txn.amountPlanned;
 }
@@ -200,6 +262,7 @@ export function totalIncome(month) {
 
 /** Full dashboard aggregate for a month, driven entirely by the user's configured buckets. */
 export function computeDashboard(month, categories, settings) {
+  ({ categories, settings } = planFor(month, categories, settings));
   const T = totalIncome(month);
   const pct = (x) => T > 0 ? Math.round((x / T) * 1000) / 10 : 0;
 
@@ -276,20 +339,48 @@ export function savingsTerm(c) {
  * The 💰 savings card (v17): every savings (sub)category with its plan for the month and what
  * is already transferred, plus totals for short-term, long-term and all savings.
  */
-export function computeSavingsOverview(month, categories) {
+export function computeSavingsOverview(month, categories, allMonths = null, monthKeyStr = null) {
+  ({ categories } = planFor(month, categories, null));
   const T = totalIncome(month);
   const rate = month.exchangeRate;
-  const items = categories.filter(c => {
-    const top = resolveTopCategory(categories, c.id);
-    return top && top.parentId !== FREE_BUCKET_ID && c.parentId !== FREE_BUCKET_ID && top.goalType === 'min';
-  }).map(c => {
-    const txns = month.transactions.filter(t => t.categoryId === c.id);
+  const balances = allMonths && monthKeyStr ? savingsBalances(allMonths, categories, monthKeyStr) : null;
+  const items = savingsCategories(categories).map(c => {
+    const txns = month.transactions.filter(t => t.categoryId === c.id && !isFromSavings(t));
     const planned = Math.max(targetEur(c, T), txns.reduce((s, t) => s + txnPlannedEur(t, rate), 0));
     const done = txns.reduce((s, t) => s + txnPaidEur(t, rate), 0);
-    return { id: c.id, name: c.name, owner: c.owner || 'shared', term: savingsTerm(c), planned, done, open: Math.max(0, planned - done) };
-  }).filter(r => r.planned > 0.004 || r.done > 0.004);
-  const sum = (list) => ({ planned: list.reduce((s, r) => s + r.planned, 0), done: list.reduce((s, r) => s + r.done, 0) });
+    const withdrawn = month.transactions.filter(t => isFromSavings(t) && t.fromSavings === c.id).reduce((s, t) => s + txnPaidEur(t, rate), 0);
+    return { id: c.id, name: c.name, owner: c.owner || 'shared', term: savingsTerm(c), planned, done, withdrawn, open: Math.max(0, planned - done), balance: balances ? balances[c.id] || 0 : null };
+  }).filter(r => r.planned > 0.004 || r.done > 0.004 || r.withdrawn > 0.004);
+  const sum = (list) => ({ planned: list.reduce((s, r) => s + r.planned, 0), done: list.reduce((s, r) => s + r.done, 0), withdrawn: list.reduce((s, r) => s + r.withdrawn, 0) });
   return { items, short: sum(items.filter(r => r.term === 'short')), long: sum(items.filter(r => r.term === 'long')), total: sum(items) };
+}
+
+/** Every savings (sub)category (its top-level block has goal "min"). */
+export function savingsCategories(categories) {
+  return categories.filter(c => {
+    const top = resolveTopCategory(categories, c.id);
+    return top && top.parentId !== FREE_BUCKET_ID && c.parentId !== FREE_BUCKET_ID && top.goalType === 'min';
+  });
+}
+
+/**
+ * Savings balance per savings category over ALL months up to and including `uptoKey`:
+ * everything transferred (paid) minus everything spent from it (v18).
+ */
+export function savingsBalances(months, categories, uptoKey) {
+  const ids = new Set(savingsCategories(categories).map(c => c.id));
+  const out = {};
+  Object.keys(months || {}).filter(k => k <= uptoKey).forEach(k => {
+    const m = months[k];
+    (m.transactions || []).forEach(t => {
+      if (isFromSavings(t)) {
+        if (t.fromSavings) out[t.fromSavings] = (out[t.fromSavings] || 0) - txnPaidEur(t, m.exchangeRate);
+        return;
+      }
+      if (ids.has(t.categoryId)) out[t.categoryId] = (out[t.categoryId] || 0) + txnPaidEur(t, m.exchangeRate);
+    });
+  });
+  return out;
 }
 
 /** Is this transaction money moved to savings (its top category has goal "min")? */
@@ -308,6 +399,7 @@ export function computeRemaining(month, categories = null, settings = null) {
   const out = { total: 0, bills: 0, envelopes: 0, savings: 0, count: 0, byAccount: { shared: 0, giorgi: 0, nino: 0 }, billsByAccount: { shared: 0, giorgi: 0, nino: 0 }, next: [] };
   // Savings targets not transferred yet (per (sub)category, by whose they are).
   if (categories) {
+    ({ categories } = planFor(month, categories, null));
     const T = totalIncome(month);
     categories.forEach(c => {
       const top = resolveTopCategory(categories, c.id);
@@ -350,6 +442,7 @@ export function computeRemaining(month, categories = null, settings = null) {
  * transfers the rest to the shared account (no money back-and-forth).
  */
 export function computeSalarySplit(month, categories, settings, overrides = {}) {
+  ({ categories, settings } = planFor(month, categories, settings));
   const income = { giorgi: month.income?.giorgi || 0, nino: month.income?.nino || 0 };
   const T = income.giorgi + income.nino;
   // The family splits shared costs 50/50 (v13). 'proportional' remains available to callers only.
@@ -467,6 +560,8 @@ export function computeRangeOverview(months, categories, fromKey, toKey, year = 
     month.transactions.forEach(t => {
       const eur = txnPaidEur(t, month.exchangeRate);
       if (eur === 0) return;
+      // spent from savings: a real expense, and that much less is saved (v18)
+      if (isFromSavings(t)) { spent += eur; saved -= eur; return; }
       if (minTops.has(topIdOf(categories, t.categoryId))) saved += eur; else spent += eur;
       if (isGeorgia(t, categories)) georgia += eur;
     });
@@ -493,7 +588,9 @@ export function computeMonthOverview(month, categories, settings) {
   const rate = month.exchangeRate;
   const bills = { planned: 0, paid: 0, count: 0, open: 0 };
   const budgets = { planned: 0, used: 0 };
+  let fromSavings = 0;
   month.transactions.forEach(t => {
+    if (isFromSavings(t)) { fromSavings += txnPaidEur(t, rate); return; }
     if (topIdOf(categories, t.categoryId) === FREE_BUCKET_ID || isSavingsTxn(t, categories)) return;
     if (isEnvelope(t)) {
       budgets.planned += txnPlannedEur(t, rate);
@@ -511,11 +608,12 @@ export function computeMonthOverview(month, categories, settings) {
   const giorgi = person('giorgi'), nino = person('nino');
   const total = {};
   Object.keys(giorgi).forEach(k => { total[k] = giorgi[k] + nino[k]; });
-  return { bills, budgets, total, giorgi, nino };
+  return { bills, budgets, fromSavings, total, giorgi, nino };
 }
 
 /** Plan-vs-actual rows: one per user bucket, plus the two free-money person splits. */
 export function computePlanVsActual(month, categories, settings) {
+  ({ categories, settings } = planFor(month, categories, settings));
   const T = totalIncome(month);
   const pct = (x) => T > 0 ? (x / T) * 100 : 0;
   const dash = computeDashboard(month, categories, settings);
@@ -744,6 +842,27 @@ export function runSelfChecks() {
   ]);
   assertClose('savings card: short 300, long 200, total 500', so.short.planned * 1000 + so.long.planned + so.total.planned / 1000, 300 * 1000 + 200 + 0.5);
   assertEq('formatMoney negative', formatMoney(-12.5, 'EUR'), '-12,50 €');
+
+  // v18: a month's own plan copy wins over the global plan (December change must not rewrite November).
+  const pc = [{ id: 'sv', name: 'sv', targetType: 'amount', amount: 200, percent: 0, goalType: 'min', parentId: null, owner: 'giorgi' }];
+  const nov = { exchangeRate: 3, income: { giorgi: 2000, nino: 0 }, transactions: [], plan: { cats: { sv: { targetType: 'amount', amount: 240 } } } };
+  const dec = { exchangeRate: 3, income: { giorgi: 2000, nino: 0 }, transactions: [] };
+  assertClose('month plan copy: November keeps 240', computeSavingsOverview(nov, pc).total.planned, 240);
+  assertClose('no copy: December uses global 200', computeSavingsOverview(dec, pc).total.planned, 200);
+  // 'auto' target = this month's planned expenses of that category
+  const ac = [{ id: 'ess', name: 'e', targetType: 'auto', percent: 0, amount: null, goalType: 'max', parentId: null }];
+  const am = { exchangeRate: 3, income: { giorgi: 1000, nino: 0 }, transactions: [{ id: 'a', categoryId: 'ess', currency: 'EUR', amountPlanned: 640, paid: false }] };
+  assertClose('auto target follows the month (640)', computeDashboard(am, ac, settings).buckets[0].target, 640);
+  // Spent from savings: real expense, savings balance and the period "saved" go down, plan untouched.
+  const sm2 = { exchangeRate: 3, income: { giorgi: 1000, nino: 0 }, transactions: [
+    { id: 's', categoryId: 'cat_savings', currency: 'EUR', amountPlanned: 240, amountActual: 240, paid: true },
+    { id: 'w', kind: 'fromSavings', fromSavings: 'cat_savings', categoryId: 'cat_essentials', currency: 'EUR', amountPlanned: 0, amountActual: 90, paid: true }
+  ] };
+  assertClose('from savings: planned 0', txnPlannedEur(sm2.transactions[1], 3), 0);
+  assertClose('from savings: balance 240 - 90', savingsBalances({ '2026-11': sm2 }, categories, '2026-11').cat_savings, 150);
+  const ro2 = computeRangeOverview({ '2026-11': sm2 }, categories, '2026-11', '2026-11', null, '2026-11');
+  assertClose('from savings: period saved 150, spent 90', ro2.rows[0].saved * 1000 + ro2.rows[0].spent, 150090);
+  assertClose('from savings: month still shows 240 transferred', computeSavingsOverview(sm2, categories).items[0].done, 240);
 
   const passed = results.filter(r => r.pass).length;
   const failed = results.filter(r => !r.pass);

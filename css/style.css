@@ -1148,3 +1148,29 @@ h1, h2, h3, h4 { margin: 0 0 var(--space-3); font-weight: 700; }
   .card.savings-sub { margin-left: 0; }
   .modal { max-width: 640px; }
 }
+
+/* ---- v18: per-month plan, savings spend, budget buttons, assistant ---- */
+.envelope-row__btns { display: flex; gap: 4px; flex-shrink: 0; }
+.savings-card__actions { margin-top: var(--space-2); }
+.plan-scope { margin: var(--space-2) 0 4px; }
+.plan-row__owner { margin-left: 6px; font-size: 0.75rem; vertical-align: middle; }
+.plan-row__hint { display: block; font-size: 0.75rem; color: var(--text-muted); font-weight: 400; margin-left: 18px; }
+.plan-help__list { margin: var(--space-2) 0 0; padding-left: 18px; font-size: 0.85rem; color: var(--text-muted); }
+.plan-help__list li { margin-bottom: 4px; }
+.ai-view .card { margin-bottom: var(--space-3); }
+.ai-chat { display: flex; flex-direction: column; gap: var(--space-2); }
+.ai-msg { padding: var(--space-2) var(--space-3); border-radius: 12px; max-width: 92%; white-space: pre-wrap; word-break: break-word; font-size: 0.95rem; }
+.ai-msg--user { align-self: flex-end; background: rgba(var(--accent-rgb, 37, 99, 235), 0.12); }
+.ai-msg--ai { align-self: flex-start; background: var(--surface-2, rgba(127,127,127,0.1)); }
+.ai-msg--sys { align-self: center; font-size: 0.8rem; color: var(--text-muted); }
+.ai-proposal { border: 1px solid var(--border); border-radius: 10px; padding: var(--space-2); display: flex; flex-direction: column; gap: 6px; align-self: stretch; }
+.ai-proposal__row { display: flex; gap: 8px; align-items: flex-start; font-size: 0.9rem; }
+.ai-proposal__row input { margin-top: 3px; }
+.ai-input { display: flex; gap: var(--space-2); align-items: flex-end; }
+.ai-input textarea { flex: 1; min-height: 64px; resize: vertical; font: inherit; padding: 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+.diag-item { padding: 6px 0; border-top: 1px solid var(--border); font-size: 0.9rem; }
+.diag-item:first-child { border-top: none; }
+.diag-item__fix { font-size: 0.8rem; color: var(--text-muted); }
+.diag-item--warn .diag-item__title::before { content: '⚠️ '; }
+.diag-item--info .diag-item__title::before { content: 'ℹ️ '; }
+.diag-item--bug .diag-item__title::before { content: '🐞 '; }

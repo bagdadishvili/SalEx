@@ -17,6 +17,7 @@ export const TEXT_GROUPS = [
     'tab.transactions': 'ტრანზაქციები',
     'tab.templates': 'შაბლონები',
     'tab.categories': 'კატეგორიები',
+    'tab.assistant': 'AI',
     'tab.settings': 'პარამეტრები'
   }],
   ['cards', '🧩 დეშბორდის ბარათები', {

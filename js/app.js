@@ -13,6 +13,7 @@ import { renderTransactions } from './views/transactions.js';
 import { renderTemplates } from './views/templates.js';
 import { renderCategories } from './views/categories.js';
 import { renderSettings } from './views/settings.js';
+import { renderAssistant } from './views/assistant.js';
 
 const routes = {
   dashboard: renderDashboard,
@@ -20,6 +21,7 @@ const routes = {
   templates: renderTemplates,
   categories: renderCategories,
   settings: renderSettings,
+  assistant: renderAssistant,
   admin: renderAdmin
 };
 
@@ -354,7 +356,7 @@ function askNewText(key, current, def) {
 }
 
 /** Shown in Settings; bump together with CACHE_VERSION in sw.js. */
-export const APP_VERSION = '17';
+export const APP_VERSION = '18';
 
 export { applyAppearance, checkBackupReminder };
 

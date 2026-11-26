@@ -195,6 +195,7 @@ function txnRow(txn, month, categories, refresh) {
       // food/fuel and the extras bought with that money are "expenses", not bills of their category
       ...(envelope ? [el('span', { class: 'chip', text: '🛒 ხარჯი' })]
         : isExtra(txn) ? [el('span', { class: 'chip', text: '🧺 დამატებითი ხარჯი' })]
+        : txn.kind === 'fromSavings' ? [...categoryChips(categories, txn.categoryId), el('span', { class: 'chip', text: `💸 ${categories.find(c => c.id === txn.fromSavings)?.name || 'დანაზოგი'}-დან` })]
         : categoryChips(categories, txn.categoryId)),
       txn.toGeorgia || category?.georgiaTransfer ? georgiaChip() : null,
       payerChip(txn.account),
@@ -269,6 +270,7 @@ function txnRow(txn, month, categories, refresh) {
  */
 export function payButton(txn, month, refresh) {
   if (txn.kind === 'extra') return el('span', { class: 'chip', title: 'დამატებითი ხარჯი (უკვე გადახდილი)', text: '🧺 დამატებითი' });
+  if (txn.kind === 'fromSavings') return el('span', { class: 'chip', title: 'დანაზოგიდან გადახდილი ხარჯი', text: '💸 დანაზოგიდან' });
   const envelope = isEnvelope(txn);
   if (envelope) {
     const b = el('button', { type: 'button', class: 'pay-btn pay-btn--envelope', 'aria-label': 'ხარჯის ან ნაშთის ჩაწერა', text: '＋ ხარჯი' });
@@ -417,6 +419,12 @@ export function openTransactionForm(existing, monthKeyStr, onSaved, presets = {}
   currencySelect.value = existing?.currency || 'EUR';
 
   const amountInput = el('input', { type: 'text', inputmode: 'decimal', value: (existing?.amountPlanned ?? 0).toFixed(2).replace('.', ',') });
+  // v18: a PAID entry shows (and saves) the amount that was really paid — before, the form only
+  // changed the plan, so the list (which shows the paid amount) kept the old number.
+  const fromSav = !!existing && existing.kind === 'fromSavings';
+  const showPaid = !!existing && existing.paid && !isEnvelope(existing);
+  const paidInput = showPaid ? el('input', { type: 'text', inputmode: 'decimal', value: Number(existing.amountActual ?? existing.amountPlanned ?? 0).toFixed(2).replace('.', ',') }) : null;
+  if (fromSav && paidInput) amountInput.value = paidInput.value;
 
   const dueDateInput = el('input', { type: 'date', value: existing?.dueDate || `${monthKeyStr}-01` });
 
@@ -446,7 +454,7 @@ export function openTransactionForm(existing, monthKeyStr, onSaved, presets = {}
     el('div', { class: 'field' }, [el('label', { text: 'ტიპი' }), typeSelect])
   ]);
   asTemplateBox.addEventListener('change', () => { tplExtra.hidden = !asTemplateBox.checked; });
-  const asTemplateField = isEdit && existing.templateId ? null : el('div', {}, [
+  const asTemplateField = isEdit && (existing.templateId || fromSav || existing.kind === 'extra') ? null : el('div', {}, [
     el('label', { class: 'field checkbox-field' }, [asTemplateBox, el('span', { text: '🔁 შაბლონადაც შევინახო — მომავალ თვეებშიც ავტომატურად მოვა' })]),
     tplExtra
   ]);
@@ -455,9 +463,12 @@ export function openTransactionForm(existing, monthKeyStr, onSaved, presets = {}
     el('div', { class: 'field' }, [el('label', { text: 'სახელი' }), nameInput]),
     el('div', { class: 'field' }, [el('label', { text: 'კატეგორია' }), categorySelect]),
     el('div', { class: 'field-row' }, [
-      el('div', { class: 'field' }, [el('label', { text: 'თანხა' }), amountInput]),
+      fromSav ? null : el('div', { class: 'field' }, [el('label', { text: showPaid ? 'გეგმა (დაგეგმილი თანხა)' : 'თანხა' }), amountInput]),
+      showPaid ? el('div', { class: 'field' }, [el('label', { text: '✓ გადახდილი თანხა' }), paidInput]) : null,
       el('div', { class: 'field' }, [el('label', { text: 'ვალუტა' }), currencySelect])
     ]),
+    showPaid && !fromSav ? el('p', { class: 'card__sub', text: 'გადახდილ ჩანაწერს ორი თანხა აქვს: გეგმა და რეალურად გადახდილი. სიაში და ჯამებში ჩანს გადახდილი.' }) : null,
+    fromSav ? el('p', { class: 'card__sub', text: '💸 ეს ხარჯი დანაზოგიდან გადაიხადეთ — თანხა აკლდება დანაზოგის ნაშთს.' }) : null,
     el('div', { class: 'field' }, [el('label', { text: 'გადახდის თარიღი' }), dueDateInput]),
     el('label', { class: 'field checkbox-field' }, [georgiaBox, el('span', { text: '📤 საქართველოში გადასარიცხი' })]),
     el('div', { class: 'field' }, [el('label', { text: 'ვინ იხდის (ვისი ანგარიშიდან)' }), accountSelect]),
@@ -475,8 +486,11 @@ export function openTransactionForm(existing, monthKeyStr, onSaved, presets = {}
     e.preventDefault();
     const name = nameInput.value.trim();
     if (!name) { toast('შეავსეთ სახელი', 'error'); return; }
-    const amount = parseAmountInput(amountInput.value);
-    if (amount <= 0) { toast('შეიყვანეთ სწორი თანხა', 'error'); return; }
+    const paidAmount = paidInput ? parseAmountInput(paidInput.value) : null;
+    if (paidInput && !(paidAmount > 0)) { toast('შეიყვანეთ სწორი გადახდილი თანხა', 'error'); return; }
+    // a "from savings" entry has no plan of its own (planned 0) — only the paid amount
+    const amount = fromSav ? 0 : parseAmountInput(amountInput.value);
+    if (!fromSav && amount <= 0) { toast('შეიყვანეთ სწორი თანხა', 'error'); return; }
 
     let madeTemplate = false;
     updateState(draft => {
@@ -494,6 +508,7 @@ export function openTransactionForm(existing, monthKeyStr, onSaved, presets = {}
           const m = findMonthByTxnId(draft, existing.id);
           const t = findTxn(draft, existing.id);
           Object.assign(t, { templateId: tplId, name, categoryId: categorySelect.value, currency: currencySelect.value, amountPlanned: amount, dueDate: dueDateInput.value, owner: accountSelect.value, account: accountSelect.value, toGeorgia: georgiaBox.checked, note: noteInput.value });
+          if (paidInput && t.paid) t.amountActual = paidAmount;
           if (m && !m.preparedAt) m.addedSingly = true;
         } else {
           addTemplateToMonth(draft, tplId, monthKeyStr);
@@ -508,6 +523,7 @@ export function openTransactionForm(existing, monthKeyStr, onSaved, presets = {}
           name, categoryId: categorySelect.value, currency: currencySelect.value,
           amountPlanned: amount, dueDate: dueDateInput.value, owner: accountSelect.value, account: accountSelect.value, toGeorgia: georgiaBox.checked, note: noteInput.value
         });
+        if (paidInput && t.paid) t.amountActual = paidAmount;
       } else {
         ensureMonth(draft, monthKeyStr);
         draft.months[monthKeyStr].transactions.push({

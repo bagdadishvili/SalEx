@@ -304,6 +304,7 @@ function migrate(raw) {
   if (!Array.isArray(raw.settings.hiddenCards)) raw.settings.hiddenCards = [];
   if (!['wizard', 'auto'].includes(raw.settings.newMonthMode)) raw.settings.newMonthMode = 'wizard';
   if (!raw.settings.texts || typeof raw.settings.texts !== 'object') raw.settings.texts = {};
+  if (!Array.isArray(raw.settings.aiNotes)) raw.settings.aiNotes = []; // v18: assistant's "to fix in the app" notes
   if (typeof raw.settings.salaryDay !== 'number' || raw.settings.salaryDay < 0 || raw.settings.salaryDay > 31) raw.settings.salaryDay = 27;
   raw.categories = Array.isArray(raw.categories) && raw.categories.length ? raw.categories : seed.categories;
   raw.categories.forEach(c => {
