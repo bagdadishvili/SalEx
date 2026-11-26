@@ -10,6 +10,7 @@ import { t, tx, personName, genitive } from '../texts.js';
 import { fetchEurGelRate } from '../rates.js';
 import { el, openModal, confirmDialog, toast, undoToast, formatDate } from '../ui.js';
 import { getSelectedMonth, onMonthChange } from '../monthNav.js';
+import { isOn } from '../features.js';
 import { renderMonthNav, bucketChip, freePseudoCategory, payerChip, georgiaChip, categoryChips, categoryOptions, PAYER_LABELS } from '../components.js';
 
 function uid(prefix) {
@@ -44,7 +45,8 @@ export function renderTransactions(root) {
   const prepBanner = el('div', {});
   container.appendChild(prepBanner);
 
-  const statusRow = el('div', { class: 'filter-row' });
+  // v20: all filters in ONE row that scrolls sideways — three rows took half a phone screen
+  const statusRow = el('div', { class: 'filter-row filter-row--scroll' });
   const statusBtns = {
     all: filterBtn(t('filter.all'), () => setStatusFilter('all'), 'filter.all'),
     unpaid: filterBtn(t('filter.unpaid'), () => setStatusFilter('unpaid'), 'filter.unpaid'),
@@ -53,8 +55,9 @@ export function renderTransactions(root) {
   };
   statusRow.append(statusBtns.all, statusBtns.unpaid, statusBtns.moved, statusBtns.paid);
   container.appendChild(statusRow);
+  const ownerRow = statusRow;
 
-  const ownerRow = el('div', { class: 'filter-row' });
+  ownerRow.appendChild(el('span', { class: 'filter-sep', 'aria-hidden': 'true' }));
   const ownerBtns = {
     all: filterBtn(`👤 ${t('filter.all')}`, () => setOwnerFilter('all')),
     giorgi: filterBtn(personName('giorgi'), () => setOwnerFilter('giorgi'), 'person.giorgi'),
@@ -62,12 +65,9 @@ export function renderTransactions(root) {
     shared: filterBtn(personName('shared'), () => setOwnerFilter('shared'), 'person.shared')
   };
   ownerRow.append(ownerBtns.all, ownerBtns.giorgi, ownerBtns.nino, ownerBtns.shared);
-  container.appendChild(ownerRow);
-
-  const groupRow = el('div', { class: 'filter-row' });
+  ownerRow.appendChild(el('span', { class: 'filter-sep', 'aria-hidden': 'true' }));
   const groupToggle = el('button', { class: 'filter-btn', ...tx('btn.groupByCategory') });
-  groupRow.appendChild(groupToggle);
-  container.appendChild(groupRow);
+  ownerRow.appendChild(groupToggle);
 
   const totalsBar = el('div', { class: 'totals-bar tabular-nums' });
   container.appendChild(totalsBar);
@@ -433,7 +433,87 @@ function openActualAmountDialog(txn, onDone) {
     toast(two ? 'ჩამოჭრილად აღინიშნა ✓' : 'გადახდილად აღინიშნა ✓');
     close();
     onDone();
+    offerTemplateAmount(txn, actual, onDone);
   });
+}
+
+// ---------------- v20: keep the template in step with what really happens ----------------
+
+/**
+ * A FIXED bill was paid with a different amount than its template says (e.g. the insurance went
+ * up): ask once whether the template — and the unpaid entries already made for later months —
+ * should use the new amount too. Variable bills (electricity…) change anyway, so no question.
+ */
+function offerTemplateAmount(txn, actual, onDone) {
+  if (!isOn('templateSync') || !txn.templateId) return;
+  const tpl = getState().templates.find(x => x.id === txn.templateId);
+  if (!tpl || tpl.type !== 'fixed' || tpl.currency !== txn.currency || Math.abs((tpl.amount || 0) - actual) < 0.005) return;
+  setTimeout(async () => {
+    const ok = await confirmDialog(`„${tpl.name}": გადახდილია ${formatMoney(actual, tpl.currency)}, შაბლონში კი ${formatMoney(tpl.amount, tpl.currency)} წერია. შაბლონშიც ჩავწერო ${formatMoney(actual, tpl.currency)}, რომ შემდეგ თვეებში ასე მოვიდეს?`,
+      { confirmLabel: 'კი, შაბლონშიც', cancelLabel: 'არა, მხოლოდ ამჯერად' });
+    if (!ok) return;
+    const fromKey = monthOfTxn(getState(), txn.id);
+    let n = 0;
+    updateState(d => {
+      const tp = d.templates.find(x => x.id === tpl.id);
+      if (tp) tp.amount = actual;
+      Object.keys(d.months).filter(k => fromKey && k > fromKey).forEach(k => d.months[k].transactions.forEach(t => {
+        if (t.templateId === tpl.id && !t.paid && Math.abs(t.amountPlanned - tpl.amount) < 0.005) { t.amountPlanned = actual; n += 1; }
+      }));
+      return d;
+    });
+    toast(`შაბლონი განახლდა ✓${n ? ` (+ ${n} ჩანაწერი შემდეგ თვეებში)` : ''}`);
+    onDone();
+  }, 350);
+}
+
+function monthOfTxn(state, id) {
+  return Object.keys(state.months).find(k => state.months[k].transactions.some(t => t.id === id)) || null;
+}
+
+/** Fields of an entry that differ from its template (what the user changed in the entry). */
+function templateDiff(tpl, tr, before) {
+  const out = [];
+  const add = (field, label, now, was, tplVal, show) => {
+    if (now !== was && now !== tplVal) out.push({ field, label, value: now, show: show || String(now) });
+  };
+  add('name', 'სახელი', tr.name, before.name, tpl.name);
+  add('amount', 'თანხა', tr.amountPlanned, before.amountPlanned, tpl.amount, formatMoney(tr.amountPlanned, tr.currency));
+  add('categoryId', 'კატეგორია', tr.categoryId, before.categoryId, tpl.categoryId, (getState().categories.find(c => c.id === tr.categoryId) || {}).name);
+  add('account', 'ვინ იხდის', tr.account, before.account, tpl.account || 'shared', personName(tr.account));
+  add('currency', 'ვალუტა', tr.currency, before.currency, tpl.currency);
+  add('toGeorgia', 'საქართველოში', !!tr.toGeorgia, !!before.toGeorgia, !!tpl.toGeorgia, tr.toGeorgia ? 'კი' : 'არა');
+  const day = (iso) => (iso || '').slice(8, 10);
+  if (day(tr.dueDate) && day(tr.dueDate) !== day(before.dueDate) && day(tr.dueDate) !== day(tpl.firstDueDate)) out.push({ field: 'day', label: 'გადახდის დღე', value: day(tr.dueDate), show: day(tr.dueDate) });
+  return out;
+}
+
+/** After editing an entry made from a template: "should the template change too?" */
+function offerTemplateUpdate(before, onDone) {
+  if (!isOn('templateSync') || !before.templateId) return;
+  const s = getState();
+  const tpl = s.templates.find(x => x.id === before.templateId);
+  const key = monthOfTxn(s, before.id);
+  const tr = key && s.months[key].transactions.find(t => t.id === before.id);
+  if (!tpl || !tr) return;
+  const diff = templateDiff(tpl, tr, before);
+  if (!diff.length) return;
+  setTimeout(async () => {
+    const ok = await confirmDialog(`შაბლონიც შევცვალო, რომ შემდეგ თვეებშიც ასე მოვიდეს? (${diff.map(d => `${d.label}: ${d.show}`).join('; ')})`,
+      { confirmLabel: 'კი, შაბლონიც', cancelLabel: 'არა, მხოლოდ ეს ჩანაწერი' });
+    if (!ok) return;
+    updateState(d => {
+      const tp = d.templates.find(x => x.id === tpl.id);
+      if (!tp) return d;
+      diff.forEach(x => {
+        if (x.field === 'day') tp.firstDueDate = `${tp.firstDueDate.slice(0, 8)}${x.value}`;
+        else if (x.field === 'account') { tp.account = x.value; tp.owner = x.value; } else tp[x.field] = x.value;
+      });
+      return d;
+    });
+    toast('შაბლონი განახლდა ✓');
+    onDone();
+  }, 350);
 }
 
 export function openTransactionForm(existing, monthKeyStr, onSaved, presets = {}) {
@@ -592,5 +672,6 @@ export function openTransactionForm(existing, monthKeyStr, onSaved, presets = {}
     toast(madeTemplate ? 'შენახულია ✓ — შაბლონიც შეიქმნა, მომავალ თვეებშიც მოვა' : 'შენახულია ✓');
     close();
     onSaved();
+    if (isEdit && !madeTemplate) offerTemplateUpdate(existing, onSaved);
   });
 }

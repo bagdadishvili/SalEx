@@ -11,6 +11,8 @@ import { monthLabelFull, monthLabel, shiftMonthKey, setSelectedMonth } from './m
 import { fetchEurGelRate } from './rates.js';
 import { personTag } from './texts.js';
 import { TEMPLATE_GROUPS, PAYER_LABELS, groupOfTemplate } from './components.js';
+import { isOn } from './features.js';
+import { forecastTemplate } from './insights.js';
 
 const CYCLE_TXT = { 2: '2 თვეში ერთხელ', 3: '3 თვეში ერთხელ', 6: '6 თვეში ერთხელ', 12: 'წელიწადში ერთხელ' };
 const GROUPS = TEMPLATE_GROUPS;
@@ -47,13 +49,19 @@ export function openPrepareWizard(initialKey, onDone = () => {}) {
     const income = { giorgi: base.income?.giorgi || 0, nino: base.income?.nino || 0 };
     let rate = base.exchangeRate || 3;
     let rateSource = null; // set when the user fetches or types a rate
-    const rows = plan.due.map(d => ({
-      tpl: d.tpl,
-      existing: d.existing,
-      include: d.existing ? true : !d.skipped,
-      amount: d.existing ? d.existing.amountPlanned : d.tpl.amount,
-      group: groupOf(state, d.tpl)
-    }));
+    // v20: a VARIABLE bill starts with the average of its last paid months (📈), not the template amount
+    const useForecast = isOn('forecast');
+    const rows = plan.due.map(d => {
+      const fc = useForecast && !d.existing && d.tpl.type === 'variable' ? forecastTemplate(state.months, d.tpl, key) : null;
+      return {
+        tpl: d.tpl,
+        existing: d.existing,
+        include: d.existing ? true : !d.skipped,
+        amount: d.existing ? d.existing.amountPlanned : (fc ? fc.avg : d.tpl.amount),
+        forecast: fc,
+        group: groupOf(state, d.tpl)
+      };
+    });
 
     body.innerHTML = '';
 
@@ -138,6 +146,7 @@ export function openPrepareWizard(initialKey, onDone = () => {}) {
           r.tpl.cycleMonths > 1 && !r.tpl.oneTime ? el('span', { class: 'chip', text: `🔁 ${CYCLE_TXT[r.tpl.cycleMonths] || r.tpl.cycleMonths + ' თვეში ერთხელ'}` }) : null,
           r.tpl.oneTime ? el('span', { class: 'chip', text: 'ერთჯერადი' }) : null,
           r.tpl.type === 'variable' ? el('span', { class: 'chip', text: 'ცვლადი' }) : null,
+          r.forecast ? el('span', { class: 'chip chip--forecast', title: `შაბლონში: ${formatMoney(r.tpl.amount, r.tpl.currency)}`, text: `📈 ${r.forecast.n} თვის საშუალო` }) : null,
           r.existing ? el('span', { class: 'chip chip--ok', text: r.existing.paid ? '✓ გადახდილია' : '✓ უკვე თვეშია' }) : null
         ];
         const row = el('label', { class: 'prep__row' + (r.include ? '' : ' prep__row--off') }, [

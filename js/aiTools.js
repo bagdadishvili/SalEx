@@ -11,7 +11,7 @@ import {
 import { planInMonth } from './plan.js';
 import { ACTIONS, RECORD_FIELDS } from './actions.js';
 import { runDiagnostics } from './diagnostics.js';
-import { budgetMonthKey } from './state.js';
+import { budgetMonthKey, salaryStart } from './state.js';
 import { initMonth } from './monthEngine.js';
 
 // ---------------- short ids ----------------
@@ -97,7 +97,7 @@ export function monthText(state, key, A) {
   const cats = state.categories;
   const { categories: rc } = planFor(m, cats, state.settings);
   const L = [];
-  L.push(`month ${key}${key === budgetMonthKey() ? ' (current budget month)' : ''}: income giorgi ${n2(m.income.giorgi)} · nino ${n2(m.income.nino)} · total ${n2(totalIncome(m))} EUR · rate ${m.exchangeRate} GEL/EUR${m.preparedAt ? '' : ' · not prepared yet'}`);
+  L.push(`month ${key}${key === budgetMonthKey() ? ' (current budget month)' : ''}: income giorgi ${n2(m.income.giorgi)} · nino ${n2(m.income.nino)} · total ${n2(totalIncome(m))} EUR · rate ${m.exchangeRate} GEL/EUR · salary arrived ${salaryStart(key, state)}${m.preparedAt ? '' : ' · not prepared yet'}${m.closedAt ? ' · closed' : ''}`);
   L.push('categories (id|name|kind|owner|parent|target this month):');
   rc.forEach(c => {
     const cfg = planInMonth(state, { cat: c.id }, key);
@@ -143,9 +143,9 @@ function overviewText(state) {
 
 function categoriesText(state, A) {
   const cats = state.categories;
-  return ['categories (id|name|kind|owner|parent|goal|term|global target|color):', ...cats.map(c => [
+  return ['categories (id|name|kind|owner|parent|goalType|term|global target|color|savings goal):', ...cats.map(c => [
     A.s(c.id, 'c'), c.name, catKind(cats, c), c.owner || 'shared', c.parentId === FREE_BUCKET_ID ? 'free' : (c.parentId ? A.s(c.parentId, 'c') : '-'),
-    c.goalType, c.term || '', targetText(c), c.color
+    c.goalType, c.term || '', targetText(c), c.color, c.goalAmount ? `${n2(c.goalAmount)}€${c.goalBy ? ` by ${c.goalBy}` : ''}` : ''
   ].join('|'))].join('\n');
 }
 

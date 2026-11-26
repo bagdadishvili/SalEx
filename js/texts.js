@@ -9,7 +9,10 @@ export const TEXT_GROUPS = [
   ['people', '👤 ადამიანები / ანგარიშები', {
     'person.giorgi': 'გიორგი',
     'person.nino': 'ნინო',
-    'person.shared': 'საერთო'
+    'person.shared': 'საერთო',
+    'icon.giorgi': '🧔',
+    'icon.nino': '👩‍🦰',
+    'icon.shared': '👥'
   }],
   ['nav', '🧭 მენიუ', {
     'app.title': 'ოჯახის ბიუჯეტი',
@@ -30,7 +33,15 @@ export const TEXT_GROUPS = [
     'card.georgia': 'საქართველოში გადასარიცხი',
     'card.savings': '💰 დანაზოგები',
     'card.split': '💸 ვინ რამდენი გადარიცხოს (50/50)',
-    'card.year': 'მიმოხილვა პერიოდით'
+    'card.year': 'მიმოხილვა პერიოდით',
+    'card.payday': '💶 ხელფასის დღე — ვინ სად გადარიცხოს',
+    'card.calendar': '📅 მომდევნო ჩამოჭრები',
+    'card.bank': '🏦 ბანკის ნაშთი — რა დარჩება',
+    'card.reserve': '📆 იშვიათი გადასახადების რეზერვი',
+    'card.close': '🔒 თვის დახურვა',
+    'card.trends': '📊 ხარჯი თვეების მიხედვით',
+    'card.fx': '💱 ლარის კურსის გავლენა',
+    'card.whatif': '🧮 რა იქნება, თუ…'
   }],
   ['summary', '📊 თვის მიმოხილვის ველები', {
     'summary.bills': '📄 გადასახადები (გადახდილი / სულ)',
@@ -256,9 +267,9 @@ export function personName(account) {
   return t(`person.${['giorgi', 'nino'].includes(account) ? account : 'shared'}`);
 }
 
-/** Icon per person: Nino 👩, Giorgi 👨, both 👥. */
+/** Icon per person (v20: clearly different — 🧔 Giorgi, 👩‍🦰 Nino, 👥 both; renameable in admin). */
 export function personIcon(account) {
-  return account === 'nino' ? '👩' : account === 'giorgi' ? '👨' : '👥';
+  return t(`icon.${['giorgi', 'nino'].includes(account) ? account : 'shared'}`);
 }
 
 /** "👩 ნინო" — icon and name never split over two lines. */

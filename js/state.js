@@ -24,24 +24,61 @@ export function monthKey(date = new Date()) {
   return `${y}-${m}`;
 }
 
+function shiftMonth(key, delta) {
+  const [y, m] = key.split('-').map(Number);
+  const idx = y * 12 + (m - 1) + delta;
+  return `${Math.floor(idx / 12)}-${String((idx % 12) + 1).padStart(2, '0')}`;
+}
+const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
 /**
- * The month whose budget is being spent today (v17). The salary that arrives on the salary
- * day pays the NEXT month: from 27 Oct on, spending belongs to November. salaryDay 0 = off.
+ * The day the budget of month `key` starts = the day its salary arrived (v20). The salary does
+ * not come on the same day every month, so a month may keep its own date (month.salaryDate,
+ * e.g. '2026-11-25' for December); otherwise settings.salaryDay of the month before is used
+ * (0 = plain calendar months). Changing the default never moves months that already started.
+ */
+export function salaryStart(key, s = state) {
+  const own = s && s.months && s.months[key] && s.months[key].salaryDate;
+  if (typeof own === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(own)) return own;
+  const day = Number(s && s.settings && s.settings.salaryDay) || 0;
+  if (!(day > 0)) return `${key}-01`;
+  const prev = shiftMonth(key, -1);
+  const [y, m] = prev.split('-').map(Number);
+  return `${prev}-${String(Math.min(day, new Date(y, m, 0).getDate())).padStart(2, '0')}`;
+}
+
+/**
+ * The month whose budget is being spent today (v17). The salary pays the NEXT month: from the
+ * day it arrived (e.g. 25 Nov) spending belongs to December.
  */
 export function budgetMonthKey(date = new Date()) {
-  const day = Number(state && state.settings && state.settings.salaryDay) || 0;
-  if (!(day > 0) || date.getDate() < day) return monthKey(date);
-  return monthKey(new Date(date.getFullYear(), date.getMonth() + 1, 1));
+  const iso = isoDay(date);
+  const k = monthKey(date);
+  const next = shiftMonth(k, 1);
+  if (iso >= salaryStart(next)) return next;
+  if (iso >= salaryStart(k)) return k;
+  return shiftMonth(k, -1);
 }
 
 /** Days left for the budget month, today included: until the next salary (or the month's end). */
 export function daysLeftInBudget(date = new Date()) {
-  const day = Number(state && state.settings && state.settings.salaryDay) || 0;
+  const end = salaryStart(shiftMonth(budgetMonthKey(date), 1));
+  const [y, m, d] = end.split('-').map(Number);
   const today = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  if (!(day > 0)) return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate() - date.getDate() + 1;
-  const [y, m] = budgetMonthKey(date).split('-').map(Number);
-  const pay = new Date(y, m - 1, Math.min(day, new Date(y, m, 0).getDate()));
-  return Math.max(1, Math.round((pay - today) / 86400000));
+  return Math.max(1, Math.round((new Date(y, m - 1, d) - today) / 86400000));
+}
+
+/**
+ * Before the default salary day changes: every month whose budget already started keeps the
+ * date it had (written into month.salaryDate), so only future months follow the new default.
+ */
+export function freezeSalaryDates(draft, todayIso = todayISO()) {
+  Object.keys(draft.months || {}).forEach(k => {
+    const m = draft.months[k];
+    if (m.salaryDate) return;
+    const start = salaryStart(k, draft);
+    if (start <= todayIso) m.salaryDate = start;
+  });
 }
 
 function todayISO() {
@@ -303,6 +340,7 @@ function migrate(raw) {
   if (!['wizard', 'auto'].includes(raw.settings.newMonthMode)) raw.settings.newMonthMode = 'wizard';
   if (!raw.settings.texts || typeof raw.settings.texts !== 'object') raw.settings.texts = {};
   if (!Array.isArray(raw.settings.aiNotes)) raw.settings.aiNotes = []; // v18: assistant's "to fix in the app" notes
+  if (!raw.settings.features || typeof raw.settings.features !== 'object' || Array.isArray(raw.settings.features)) raw.settings.features = {}; // v20: on/off per feature
   if (typeof raw.settings.salaryDay !== 'number' || raw.settings.salaryDay < 0 || raw.settings.salaryDay > 31) raw.settings.salaryDay = 27;
   raw.categories = Array.isArray(raw.categories) && raw.categories.length ? raw.categories : seed.categories;
   raw.categories.forEach(c => {

@@ -7,6 +7,8 @@ import { el, openModal, toast, undoToast } from '../../ui.js';
 import { tx, personTag } from '../../texts.js';
 import { expanded, markDone } from './shared.js';
 import { categoryCard } from './blocks.js';
+import { isOn } from '../../features.js';
+import { goalProgress } from '../../insights.js';
 
 /**
  * 💰 One card for all savings: each saving (whose, short/long term) with plan and what is
@@ -25,15 +27,29 @@ export function savingsCard(ctx) {
   const m0 = (v) => formatMoney(v, 'EUR', 0);
   const TERM = { short: 'მოკლევადიანი', long: 'გრძელვადიანი' };
   const list = el('div', { class: 'savings-list' });
+  const goalsOn = isOn('goals');
   so.items.forEach(r => {
     const done = r.open <= 0.5;
+    const cat = categories.find(c => c.id === r.id);
+    const g = goalsOn ? goalProgress(cat, r.balance, ctx.key) : null;
+    let goalRow = null;
+    if (goalsOn) {
+      const goalBtn = el('button', { type: 'button', class: 'link-btn', text: g ? `🎯 ${m0(g.goal)}${g.by ? ` · ${g.by.slice(5, 7)}.${g.by.slice(0, 4)}-მდე` : ''}` : '🎯 მიზნის დასმა' });
+      goalBtn.addEventListener('click', (e) => { e.stopPropagation(); openGoalDialog(cat, ctx); });
+      goalRow = el('div', { class: 'goal-row' }, [
+        goalBtn,
+        g ? el('span', { class: 'detail-row__meta tabular-nums' + (g.late ? ' text-danger' : ''), text: `${Math.round(g.pct)}%${g.left > 0.5 ? ` · აკლია ${m0(g.left)}` : ' ✓'}${g.perMonth ? ` · თვეში ${m0(g.perMonth)}` : ''}` }) : null,
+        g ? el('div', { class: 'goal-bar' }, [el('div', { class: 'goal-bar__fill', style: `width:${g.pct}%` })]) : null
+      ]);
+    }
     list.appendChild(el('div', { class: 'savings-item' + (done ? ' savings-item--done' : '') }, [
       el('span', { class: 'savings-item__icon', text: done ? '✓' : '⏳' }),
       el('div', { class: 'savings-item__main' }, [
         el('div', { class: 'savings-item__name', text: r.name }),
         el('div', { class: 'detail-row__meta', text: [personTag(r.owner), TERM[r.term],
           r.withdrawn > 0.004 ? `💸 დაიხარჯა ${m0(r.withdrawn)}` : '',
-          r.balance !== null ? `ნაშთი სულ ${m0(r.balance)}` : ''].filter(Boolean).join(' · ') })
+          r.balance !== null ? `ნაშთი სულ ${m0(r.balance)}` : ''].filter(Boolean).join(' · ') }),
+        goalRow
       ]),
       el('div', { class: 'savings-item__amount tabular-nums', text: `${m0(r.done)} / ${m0(r.planned)}` })
     ]));
@@ -66,6 +82,36 @@ export function savingsCard(ctx) {
   if (!open) return card;
   const subCards = blocks.map(b => { const c = categoryCard(b, ctx); c.classList.add('savings-sub'); return c; });
   return [card, ...subCards];
+}
+
+/** 🎯 Goal of a saving: amount and (optional) month to reach it by. Empty amount = no goal. */
+function openGoalDialog(cat, ctx) {
+  if (!cat) return;
+  const form = el('form', {});
+  form.appendChild(el('p', { class: 'card__sub', text: 'რამდენი გინდა დააგროვო და რომელ თვემდე. აპი ითვლის, თვეში რამდენი უნდა გადარიცხო (ნაშთი = ყველა გადარიცხვა − დახარჯული).' }));
+  const amount = el('input', { type: 'text', inputmode: 'decimal', value: cat.goalAmount ? String(cat.goalAmount).replace('.', ',') : '', placeholder: '0' });
+  const by = el('input', { type: 'month', value: cat.goalBy || '' });
+  form.append(
+    el('div', { class: 'field-row' }, [
+      el('div', { class: 'field' }, [el('label', { text: 'მიზანი (€)' }), amount]),
+      el('div', { class: 'field' }, [el('label', { text: 'ვადა (თვე)' }), by])
+    ]),
+    el('div', { class: 'btn-row' }, [el('button', { class: 'btn btn--primary', type: 'submit', text: 'შენახვა' })])
+  );
+  const { close } = openModal(form, { title: `🎯 ${cat.name}` });
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const v = parseAmountInput(amount.value);
+    updateState(d => {
+      const c = d.categories.find(x => x.id === cat.id);
+      if (!c) return d;
+      if (v > 0) { c.goalAmount = v; c.goalBy = /^\d{4}-\d{2}$/.test(by.value) ? by.value : ''; } else { delete c.goalAmount; delete c.goalBy; }
+      return d;
+    });
+    close();
+    toast(v > 0 ? 'მიზანი შენახულია ✓' : 'მიზანი მოიხსნა');
+    ctx.rerender();
+  });
 }
 
 /**

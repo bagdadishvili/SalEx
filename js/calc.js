@@ -234,7 +234,7 @@ function sumFreeByOwner(month, categories, owner, usePaidActual) {
  * The dashboard card order actually rendered: stored order, cleaned of stale ids,
  * with any new top-level categories inserted before the free-money card.
  */
-export const FIXED_CARDS = ['summary', 'due', 'envelopes', 'extras', 'income', 'rate', 'georgia', 'savings', 'split', 'year'];
+export const FIXED_CARDS = ['summary', 'due', 'payday', 'calendar', 'close', 'envelopes', 'extras', 'income', 'rate', 'bank', 'georgia', 'savings', 'reserve', 'split', 'year', 'trends', 'fx', 'whatif'];
 
 export function effectiveCardOrder(settings, categories) {
   const fixed = FIXED_CARDS;

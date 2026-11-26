@@ -6,6 +6,7 @@ import { getState, updateState } from '../state.js';
 import { el, toast, confirmDialog } from '../ui.js';
 import { TEXT_GROUPS, t, defaultText, setText, setTextEditMode, isTextEditMode, rawOverrides, seenTexts, RAW } from '../texts.js';
 import { navigate, collectAllTexts } from '../app.js';
+import { revealInSettings } from './settings.js';
 
 const PAGE_NAMES = {
   dashboard: '🏠 დეშბორდი', transactions: '💳 ტრანზაქციები', templates: '🧾 შაბლონები', categories: '🏷️ კატეგორიები',
@@ -145,7 +146,7 @@ export function renderAdmin(root) {
     groupsWrap.appendChild(el('div', { class: 'card' }, [
       el('div', { class: 'card__title', text: '🔗 სხვა პარამეტრები' }),
       el('div', { class: 'btn-row' }, [
-        linkBtn('🧩 დეშბორდის ბლოკები (დამალვა / თანმიმდევრობა)', () => { navigate('settings'); setTimeout(() => document.getElementById('dashboard-layout')?.scrollIntoView({ behavior: 'smooth' }), 60); }),
+        linkBtn('🧩 დეშბორდის ბლოკები (დამალვა / თანმიმდევრობა)', () => { navigate('settings'); setTimeout(() => revealInSettings('dashboard-layout'), 60); }),
         linkBtn('🏷️ კატეგორიები (სახელი, ფერი, ვისია, %)', () => navigate('categories')),
         linkBtn('🧾 შაბლონები', () => navigate('templates')),
         linkBtn('⚙️ ყველა პარამეტრი', () => navigate('settings'))

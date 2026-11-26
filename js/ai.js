@@ -1,5 +1,5 @@
 // ai.js — the assistant's connection to an AI provider, straight from the browser (v19):
-// Claude (Anthropic), ChatGPT (OpenAI), Gemini (Google), OpenRouter (many models with one key)
+// Claude (Anthropic), ChatGPT (OpenAI), Gemini (Google), DeepSeek, OpenRouter (many models with one key)
 // or any other OpenAI-compatible service (Mistral, DeepSeek, Groq, a local Ollama/LM Studio…).
 // The family's own API keys stay on THIS device only (never in backups or sync).
 // Each provider has an adapter: it turns the shared tool list (aiTools.js) and the conversation
@@ -14,6 +14,7 @@ export const PROVIDERS = {
   anthropic: { label: 'Claude (Anthropic)', kind: 'anthropic', base: 'https://api.anthropic.com/v1', model: 'claude-opus-5-5', keyHint: 'sk-ant-…', keyUrl: 'https://console.anthropic.com/settings/keys' },
   openai: { label: 'ChatGPT (OpenAI)', kind: 'openai', base: 'https://api.openai.com/v1', model: 'gpt-5-mini', keyHint: 'sk-…', keyUrl: 'https://platform.openai.com/api-keys' },
   gemini: { label: 'Gemini (Google)', kind: 'gemini', base: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-2.5-flash', keyHint: 'AIza…', keyUrl: 'https://aistudio.google.com/apikey' },
+  deepseek: { label: 'DeepSeek — ძალიან იაფი', kind: 'openai', base: 'https://api.deepseek.com', model: 'deepseek-chat', keyHint: 'sk-…', keyUrl: 'https://platform.deepseek.com/api_keys' },
   openrouter: { label: 'OpenRouter — ბევრი მოდელი ერთი გასაღებით', kind: 'openai', base: 'https://openrouter.ai/api/v1', model: 'google/gemini-2.5-flash', keyHint: 'sk-or-…', keyUrl: 'https://openrouter.ai/keys' },
   custom: { label: 'სხვა სერვისი (OpenAI-თავსებადი)', kind: 'openai', base: '', model: '', keyHint: 'API key', keyUrl: '' }
 };
@@ -290,6 +291,7 @@ Data model:
 - Transaction kinds: bill (planned amount; paid amount once paid), envelope = spend-as-you-go budget (food, fuel: budget, used, left), extra = bought with an envelope's money, fromSavings = an expense paid with saved money (lowers the savings balance; the month's transfer to savings stays).
 - Two-step bills: a bill debited from giorgi's or nino's OWN account is first "transferred" (money moved to that account) and later "paid" (the bank debited it). Shared-account bills, savings transfers and envelopes are one step.
 - Templates create each month's bills (cycle in months, first due date).
+- A month's budget starts the day its salary arrived (month salaryDate; settings.salaryDay is only the default for new months). Savings categories may have a goal (goalAmount, goalBy YYYY-MM). Optional features are switched on/off in settings.features.
 - Ids are short: t# transaction, c# category, p# template, "free" = personal free money.
 
 How to work:

@@ -4,7 +4,7 @@
 // IndexedDB), so updating or clearing this cache never touches it.
 // Still bump CACHE_VERSION on releases — it forces a clean re-download of the app shell.
 
-const CACHE_VERSION = 'family-budget-v19';
+const CACHE_VERSION = 'family-budget-v20';
 const NETWORK_TIMEOUT_MS = 4000;
 
 // Paths are resolved relative to this file's location, so the app works at
@@ -39,6 +39,11 @@ const APP_SHELL = [
   './js/views/dash/budgets.js',
   './js/views/dash/split.js',
   './js/views/dash/period.js',
+  './js/views/dash/flow.js',
+  './js/views/dash/planning.js',
+  './js/views/dash/analysis.js',
+  './js/features.js',
+  './js/insights.js',
   './js/views/transactions.js',
   './js/views/templates.js',
   './js/views/categories.js',

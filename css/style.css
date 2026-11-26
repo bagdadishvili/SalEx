@@ -1223,3 +1223,99 @@ button, .btn, .pay-btn, .filter-btn, .icon-btn, .segmented__btn, .tab-bar__item 
 .admin-page { margin: var(--space-3) 0 2px; padding: 4px 8px; border-radius: var(--radius-sm); background: var(--surface-2); font-size: var(--fs-sm); font-weight: 700; }
 .admin-row--changed .admin-row__label { color: var(--accent); }
 .admin-row__label span { overflow-wrap: anywhere; }
+
+/* ---------- v20: sections, folding settings, optional features, full tab names ---------- */
+/* Bottom menu on phones: every name in full on one line; app.js (fitNavLabels) shrinks the
+   font a little if the names do not fit. No "…", no split words. */
+@media (max-width: 859px) {
+  .tab-bar { padding-left: 3px; padding-right: 3px; column-gap: 4px; }
+  .tab-bar__item { flex: 1 1 auto; min-width: 0; padding: 4px 1px; gap: 3px; }
+  .tab-bar__label { font-size: var(--tab-label-size, 11px); letter-spacing: -0.015em; white-space: nowrap; overflow: hidden; text-overflow: clip; max-width: 100%; padding: 0; }
+  .tab-bar__icon { font-size: 21px; }
+}
+
+/* person colours: Giorgi blue, Nino orange — told apart at a glance */
+:root { --p-giorgi: #0369a1; --p-giorgi-bg: #e0f2fe; --p-nino: #c2410c; --p-nino-bg: #ffedd5; }
+[data-theme="dark"] { --p-giorgi: #7dd3fc; --p-giorgi-bg: #0c2a3d; --p-nino: #fdba74; --p-nino-bg: #3b1d0c; }
+.chip--p-giorgi { background: var(--p-giorgi-bg); color: var(--p-giorgi); border-color: transparent; font-weight: 600; }
+.chip--p-nino { background: var(--p-nino-bg); color: var(--p-nino); border-color: transparent; font-weight: 600; }
+
+/* dashboard sections */
+.dash-sections { margin: 0 0 var(--space-3); }
+.dash-sections .segmented__btn { font-size: var(--fs-sm); padding: 6px 4px; line-height: 1.2; white-space: nowrap; }
+
+/* folding settings sections */
+.settings-acc { padding: 0; }
+.settings-acc > summary { list-style: none; cursor: pointer; padding: var(--space-3) var(--space-4); font-weight: 700; font-size: 0.95rem; display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); min-height: 52px; }
+.settings-acc > summary::-webkit-details-marker { display: none; }
+.settings-acc > summary::after { content: '▾'; color: var(--text-muted); transition: transform 0.15s ease; }
+.settings-acc:not([open]) > summary::after { transform: rotate(-90deg); }
+.settings-acc__body { padding: 0 var(--space-4) var(--space-3); }
+.settings-acc--danger > summary { color: var(--danger); }
+.settings-view .settings-acc { margin-bottom: var(--space-2); }
+.feature-row { display: flex; gap: var(--space-3); align-items: flex-start; padding: 8px 0; border-top: 1px solid var(--border); cursor: pointer; }
+.feature-row input { width: 22px; height: 22px; flex: none; margin-top: 2px; accent-color: var(--accent); }
+.feature-row__text { display: flex; flex-direction: column; gap: 2px; }
+.restore-more { margin-top: 4px; }
+
+/* one-row sideways filters (transactions) */
+.filter-row--scroll { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; padding-bottom: 2px; }
+.filter-row--scroll::-webkit-scrollbar { display: none; }
+.filter-row--scroll .filter-btn { flex: none; white-space: nowrap; }
+.filter-sep { flex: none; width: 1px; background: var(--border); margin: 4px 2px; }
+
+/* templates: folding groups */
+.tpl-group-title--btn { width: 100%; border: none; cursor: pointer; font: inherit; font-weight: 700; color: var(--text); text-align: left; }
+.chip--forecast { background: rgba(var(--accent-rgb), 0.1); color: var(--accent); border-color: transparent; }
+.btn-col { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-3); }
+.btn-col .btn { width: 100%; }
+
+/* payday checklist */
+.payday-person { border-top: 1px solid var(--border); padding-top: 6px; margin-top: 4px; }
+.payday-person__name { font-weight: 700; font-size: 0.9rem; margin-bottom: 2px; }
+.payday-step { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--space-2); align-items: center; padding: 6px 0; cursor: pointer; font-size: 0.9rem; }
+.payday-step input { width: 22px; height: 22px; accent-color: var(--success); }
+.payday-step--done .payday-step__name { color: var(--text-muted); text-decoration: line-through; }
+.payday-step__amount { font-weight: 700; white-space: nowrap; }
+
+/* calendar / reserve rows */
+.cal-list { display: flex; flex-direction: column; }
+.cal-row { display: grid; grid-template-columns: 4.6rem minmax(0, 1fr) auto; gap: var(--space-2); align-items: center; padding: 7px 0; border-top: 1px dashed var(--border); }
+.cal-row:first-child { border-top: none; }
+.cal-row__date { display: flex; flex-direction: column; font-size: var(--fs-xs); color: var(--text-muted); line-height: 1.25; }
+.cal-row__date strong { color: var(--text); font-size: 0.9rem; }
+.cal-row__name { font-weight: 600; font-size: 0.9rem; overflow-wrap: anywhere; }
+.cal-row__amount { font-weight: 700; white-space: nowrap; font-size: 0.9rem; }
+.cal-row--warn .cal-row__date strong, .cal-row--warn .cal-row__date span { color: var(--danger); }
+
+/* bank balance */
+.bank-row { display: grid; grid-template-columns: minmax(0, 1fr) 8rem; grid-template-areas: "name input" "res res"; gap: 2px var(--space-2); align-items: center; padding: 6px 0; border-top: 1px solid var(--border); }
+.bank-row__name { grid-area: name; font-weight: 600; }
+.bank-row__input { grid-area: input; border: 1px solid var(--border) !important; background: var(--surface-2) !important; font-size: 1rem !important; text-align: right; min-height: 38px; }
+.bank-row__result { grid-area: res; font-size: var(--fs-xs); color: var(--text-muted); }
+
+/* month close */
+.close-card--done { background: var(--surface-2); }
+.close-card--done .stat-card__label { grid-column: 1; }
+.close-form__sel { min-height: 36px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); font: inherit; font-size: 0.85rem; max-width: 46%; }
+
+/* savings goals */
+.link-btn { background: none; border: none; padding: 2px 0; color: var(--accent); font: inherit; font-size: var(--fs-xs); font-weight: 600; cursor: pointer; text-align: left; }
+.goal-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin-top: 2px; }
+.goal-bar { flex: 1 1 100%; height: 5px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.goal-bar__fill { height: 100%; background: var(--success); border-radius: 999px; }
+
+/* charts + what-if */
+.trends-card select { margin: 4px 0; max-width: 100%; }
+.trend-chart { width: 100%; height: auto; display: block; margin-top: 6px; }
+.trend-bar { fill: rgba(var(--accent-rgb), 0.55); }
+.trend-bar--cur { fill: var(--accent); }
+.trend-bar--over { fill: var(--danger); }
+.trend-target { stroke: var(--text); stroke-width: 2; opacity: 0.55; }
+.trend-label { font-size: 10px; fill: var(--text-muted); }
+.whatif-inputs .field { min-width: 130px; margin-bottom: var(--space-2); }
+.whatif-inputs input, .whatif-inputs select { min-height: 38px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); padding: 4px 8px; font: inherit; width: 100%; }
+
+/* income card: this month's salary date */
+.salary-date-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-top: 4px; }
+.salary-date { min-height: 34px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); padding: 2px 6px; font: inherit; font-size: 0.85rem; }

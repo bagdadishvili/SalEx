@@ -11,6 +11,8 @@ import { monthIsPrepared, addTemplateToMonth } from '../monthEngine.js';
 import { navigate } from '../app.js';
 import { tx, personTag } from '../texts.js';
 import { getUiPref, setUiPref } from '../monthNav.js';
+import { isOn } from '../features.js';
+import { forecastTemplate } from '../insights.js';
 import { bucketChip, freePseudoCategory, payerChip, georgiaChip, categoryChips, TEMPLATE_GROUPS, groupOfTemplate, categoryOptions, PAYER_LABELS } from '../components.js';
 
 function bucketOfCategory(state, category) {
@@ -43,6 +45,16 @@ function nextDueMonth(tpl) {
     cursor = `${Math.floor(idx / 12)}-${String((idx % 12) + 1).padStart(2, '0')}`;
   }
   return null;
+}
+
+/** 📈 v20: average of the last paid months and the latest change (variable bills, or a fixed one that drifted). */
+function forecastChip(state, tpl) {
+  if (!isOn('forecast') || tpl.type === 'envelope' || !tpl.active) return null;
+  const f = forecastTemplate(state.months, tpl, budgetMonthKey());
+  if (!f) return null;
+  if (tpl.type !== 'variable' && Math.abs(f.avg - tpl.amount) < Math.max(0.5, tpl.amount * 0.01)) return null;
+  const arrow = Math.abs(f.changePct) < 1 ? '' : f.changePct > 0 ? ` ↑${Math.round(f.changePct)}%` : ` ↓${Math.round(-f.changePct)}%`;
+  return el('span', { class: 'chip chip--forecast', title: `ბოლო ${f.n} თვის საშუალო; ↑↓ = ბოლო გადახდა წინასთან შედარებით`, text: `📈 საშ. ${formatMoney(f.avg, tpl.currency, 0)}${arrow}` });
 }
 
 export function renderTemplates(root) {
@@ -140,8 +152,16 @@ export function renderTemplates(root) {
         const inGroup = shown.filter(tp => groupOfTemplate(state.categories, tp) === groupKey);
         if (!inGroup.length) return;
         const groupTotal = inGroup.filter(tp => tp.active).reduce((acc, tp) => acc + monthlyEur(tp), 0);
-        list.appendChild(el('div', { class: 'tpl-group-title' }, [el('div', { text: groupTitle }), el('span', { class: 'tabular-nums', text: `≈ ${formatMoney(groupTotal, 'EUR', 0)} / თვე · ${inGroup.length}` })]));
-        inGroup.forEach(tpl => renderRow(tpl, groupKey));
+        // v20: a group folds away with a tap on its title (remembered on this device)
+        const closed = new Set(getUiPref('tplClosed', []));
+        const isClosed = closed.has(groupKey) && !q;
+        const title = el('button', { type: 'button', class: 'tpl-group-title tpl-group-title--btn', 'aria-expanded': String(!isClosed) }, [
+          el('span', { text: `${isClosed ? '▸' : '▾'} ${groupTitle}` }),
+          el('span', { class: 'tabular-nums', text: `≈ ${formatMoney(groupTotal, 'EUR', 0)} / თვე · ${inGroup.length}` })
+        ]);
+        title.addEventListener('click', () => { if (closed.has(groupKey)) closed.delete(groupKey); else closed.add(groupKey); setUiPref('tplClosed', [...closed]); draw(); });
+        list.appendChild(title);
+        if (!isClosed) inGroup.forEach(tpl => renderRow(tpl, groupKey));
       });
     } else {
       const sorted = shown.slice().sort((a, b) => {
@@ -168,7 +188,8 @@ export function renderTemplates(root) {
           tpl.toGeorgia ? georgiaChip() : null,
           payerChip(tpl.account),
           tpl.type === 'variable' ? el('span', { class: 'chip', text: TYPE_LABELS[tpl.type] }) : null,
-          tpl.cycleMonths > 1 || tpl.oneTime ? el('span', { class: 'chip', text: cycleLabel }) : null
+          tpl.cycleMonths > 1 || tpl.oneTime ? el('span', { class: 'chip', text: cycleLabel }) : null,
+          forecastChip(state, tpl)
         ]),
         el('div', { class: 'row__meta', text: nextMonth ? `შემდეგი: ${monthLabel(nextMonth)}` : (tpl.active ? '' : 'გამორთულია') })
       ]);
@@ -327,12 +348,8 @@ function openTemplateForm(existing, onSaved) {
   const dateInput = fieldInputRaw('date', existing?.firstDueDate || budgetMonthKey() + '-01');
 
 
-  // Opt-in: carry the edit into already generated, still unpaid transactions (this month onward).
-  const applyExisting = el('input', { type: 'checkbox' });
-  const applyField = isEdit ? el('label', { class: 'field checkbox-field' }, [
-    applyExisting,
-    el('span', { text: 'ცვლილება აისახოს უკვე შექმნილ, გადაუხდელ ტრანზაქციებზეც (მიმდინარე და მომავალი თვეები). გადახდილი და წარსული თვეები არ შეიცვლება.' })
-  ]) : null;
+  // v20: after saving, the app ASKS whether existing entries (this month / earlier months) change too.
+  const applyField = null;
 
   // "Also add it to this month": a new expense usually starts right now.
   const addNowBox = el('input', { type: 'checkbox' });
@@ -389,30 +406,20 @@ function openTemplateForm(existing, onSaved) {
     const oneTime = cycleSelect.value === 'oneTime';
     const cycleMonths = oneTime ? 1 : Number(cycleSelect.value);
 
-    let updatedCount = 0;
     let addedTo = null;
+    let changedFields = [];
     const addKey = /^\d{4}-\d{2}$/.test(addNowMonth.value) ? addNowMonth.value : budgetMonthKey();
     updateState(draft => {
       let savedId = existing?.id;
       if (isEdit) {
         const t = draft.templates.find(x => x.id === existing.id);
+        const was = { ...t };
         Object.assign(t, {
           name, categoryId: categorySelect.value, type: typeSelect.value,
           amount, currency: currencySelect.value, cycleMonths,
           firstDueDate: dateInput.value, owner: accountSelect.value, account: accountSelect.value, toGeorgia: georgiaBox.checked, oneTime
         });
-        if (applyExisting.checked) {
-          const fromKey = budgetMonthKey();
-          Object.keys(draft.months).filter(k => k >= fromKey).forEach(k => {
-            draft.months[k].transactions
-              .filter(tx => tx.templateId === t.id && !tx.paid)
-              .forEach(tx => {
-                Object.assign(tx, { name, categoryId: t.categoryId, owner: t.account, account: t.account, toGeorgia: t.toGeorgia, currency: t.currency, amountPlanned: amount });
-                if (t.type === 'envelope' && tx.kind !== 'envelope') { tx.kind = 'envelope'; tx.spends = tx.spends || []; }
-                updatedCount += 1;
-              });
-          });
-        }
+        changedFields = ['name', 'categoryId', 'type', 'amount', 'currency', 'account', 'toGeorgia', 'firstDueDate'].filter(k => was[k] !== t[k]);
       } else {
         savedId = uid('tpl');
         draft.templates.push({
@@ -426,11 +433,60 @@ function openTemplateForm(existing, onSaved) {
     });
     toast([
       'შენახულია ✓',
-      updatedCount ? `განახლდა ${updatedCount} ტრანზაქცია` : '',
       addedTo ? `დაემატა ${monthLabel(addedTo)}-ში` : ''
     ].filter(Boolean).join(' — '));
     close();
     onSaved();
+    if (isEdit && changedFields.length) offerApplyToEntries(existing.id, changedFields, onSaved);
+  });
+}
+
+/**
+ * v20: a template was changed — should the entries already made from it change too?
+ * "ამ თვიდან" = this budget month and later; "ყველა თვეში" = also earlier months. Paid entries
+ * keep what was really paid (only the plan, name, category… change).
+ */
+function offerApplyToEntries(tplId, fields, onDone) {
+  const state = getState();
+  const cur = budgetMonthKey();
+  const linked = Object.keys(state.months).flatMap(k => state.months[k].transactions.filter(t => t.templateId === tplId).map(t => ({ k, t })));
+  if (!linked.length) return;
+  const later = linked.filter(x => x.k >= cur).length;
+  const body = el('div', {});
+  body.appendChild(el('p', { text: `შაბლონი შეიცვალა. უკვე შექმნილ ჩანაწერებშიც შევიტანო? (ამ თვიდან: ${later}, სულ: ${linked.length})` }));
+  body.appendChild(el('p', { class: 'card__sub', text: 'გადახდილ ჩანაწერებს გადახდილი თანხა უცვლელი რჩება — იცვლება გეგმა, სახელი, კატეგორია, ვინ იხდის.' }));
+  const row = el('div', { class: 'btn-col' });
+  body.appendChild(row);
+  const { close } = openModal(body, { title: '🔁 შაბლონის ცვლილება' });
+  [['none', 'მხოლოდ შემდეგ თვეებში'], ['forward', `ამ თვიდან (${later})`], ['all', `ყველა თვეში, წინებშიც (${linked.length})`]].forEach(([id, label]) => {
+    if (id === 'forward' && !later) return;
+    const b = el('button', { type: 'button', class: `btn ${id === 'none' ? 'btn--ghost' : 'btn--secondary'}`, 'data-apply': id, text: label });
+    b.addEventListener('click', () => {
+      close();
+      if (id === 'none') return;
+      let n = 0;
+      updateState(d => {
+        const tp = d.templates.find(x => x.id === tplId);
+        if (!tp) return d;
+        Object.keys(d.months).filter(k => id === 'all' || k >= cur).forEach(k => {
+          d.months[k].transactions.filter(t => t.templateId === tplId).forEach(t => {
+            if (fields.includes('name')) t.name = tp.name;
+            if (fields.includes('categoryId')) t.categoryId = tp.categoryId;
+            if (fields.includes('account')) { t.account = tp.account; t.owner = tp.account; }
+            if (fields.includes('toGeorgia')) t.toGeorgia = !!tp.toGeorgia;
+            if (fields.includes('currency') && !t.paid) t.currency = tp.currency;
+            if (fields.includes('amount')) t.amountPlanned = tp.amount;
+            if (fields.includes('firstDueDate') && t.dueDate) t.dueDate = `${t.dueDate.slice(0, 8)}${tp.firstDueDate.slice(8, 10)}`;
+            if (fields.includes('type') && tp.type === 'envelope' && t.kind !== 'envelope' && !t.paid) { t.kind = 'envelope'; t.spends = t.spends || []; }
+            n += 1;
+          });
+        });
+        return d;
+      });
+      toast(`განახლდა ${n} ჩანაწერი ✓`);
+      onDone();
+    });
+    row.appendChild(b);
   });
 }
 

@@ -3,7 +3,7 @@
 // one clearly described step at a time. Each action mutates a state draft (inside updateState)
 // and returns a short Georgian description; invalid input throws an Error with a message.
 
-import { todayISO, FREE_BUCKET_ID, budgetMonthKey } from './state.js';
+import { todayISO, FREE_BUCKET_ID, budgetMonthKey, freezeSalaryDates } from './state.js';
 import { envelopeUsed, formatMoney, isEnvelope, savingsCategories, gelToEur, isTwoStep } from './calc.js';
 import { setPlanTarget } from './plan.js';
 
@@ -239,12 +239,17 @@ const FIELDS = {
     cycleMonths: int(1, 24), firstDueDate: isoDate, account: oneOf('shared', 'giorgi', 'nino'), toGeorgia: bool, active: bool, oneTime: bool, dailyHint: bool
   },
   category: {
-    name: text(60, true), color, owner: oneOf('shared', 'giorgi', 'nino'), parentId: 'parent', goalType: oneOf('min', 'max'), term: oneOf('short', 'long', '')
+    name: text(60, true), color, owner: oneOf('shared', 'giorgi', 'nino'), parentId: 'parent', goalType: oneOf('min', 'max'), term: oneOf('short', 'long', ''),
+    goalAmount: moneyOrNull, goalBy: (v) => { if (v === null || v === '') return ''; if (!/^\d{4}-\d{2}$/.test(String(v))) throw new Error('goalBy: YYYY-MM'); return String(v); }
   },
-  month: { exchangeRate: (v) => { const n = Number(v); if (!(n > 0 && n < 100)) throw new Error('კურსი 0-ზე მეტი'); return Math.round(n * 10000) / 10000; } },
+  month: {
+    exchangeRate: (v) => { const n = Number(v); if (!(n > 0 && n < 100)) throw new Error('კურსი 0-ზე მეტი'); return Math.round(n * 10000) / 10000; },
+    salaryDate: isoDate
+  },
   settings: {
     salaryDay: int(0, 31), theme: oneOf('light', 'dark'), fontScale: oneOf('small', 'medium', 'large'), accentColor: color,
-    newMonthMode: oneOf('wizard', 'auto'), rateAuto: bool, contributionBasis: oneOf('actual', 'plan'), hiddenCards: strList, dashboardCardOrder: strList
+    newMonthMode: oneOf('wizard', 'auto'), rateAuto: bool, contributionBasis: oneOf('actual', 'plan'), hiddenCards: strList, dashboardCardOrder: strList,
+    features: (v) => { if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('features: {"payday": true, …}'); return Object.fromEntries(Object.entries(v).map(([k, x]) => [String(k), bool(x)])); }
   }
 };
 export const RECORD_FIELDS = Object.fromEntries(Object.entries(FIELDS).map(([k, v]) => [k, Object.keys(v)]));
@@ -292,6 +297,10 @@ const short = (v) => (typeof v === 'string' ? `„${v.slice(0, 40)}"` : JSON.str
 export function updateRecord(draft, key, { type, id = null, fields }) {
   const { rec } = findRecord(draft, type, id, key);
   const clean = checkFields(draft, type, fields, type === 'category' ? rec.id : null);
+  if (type === 'settings') {
+    if ('features' in clean) clean.features = { ...(rec.features || {}), ...clean.features };
+    if ('salaryDay' in clean && clean.salaryDay !== rec.salaryDay) freezeSalaryDates(draft); // months that started keep their date
+  }
   Object.assign(rec, clean);
   if (type === 'transaction' || type === 'template') {
     if ('account' in clean) rec.owner = clean.account;

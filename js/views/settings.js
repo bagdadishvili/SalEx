@@ -3,7 +3,9 @@
 // (renderSync, renderInviteDevice), restore points + cloud history (renderRestore), months
 // (renderMonths), export/import (renderDataSection), danger zone. Plan targets live in Categories.
 
-import { getState, updateState, wipeState, replaceState, snapshotCurrent, deviceName, setDeviceName } from '../state.js';
+import { getState, updateState, wipeState, replaceState, snapshotCurrent, deviceName, setDeviceName, freezeSalaryDates } from '../state.js';
+import { FEATURES, isOn } from '../features.js';
+import { getUiPref, setUiPref } from '../monthNav.js';
 import { effectiveCardOrder } from '../calc.js';
 import { el, confirmDialog, toast, openModal } from '../ui.js';
 import { listSnapshots, getSnapshotData, saveSnapshot, summarizeState, SNAPSHOT_REASONS, markSnapshotShared, deleteSnapshot } from '../backup.js';
@@ -17,11 +19,14 @@ import { COLOR_PRESETS } from '../components.js';
 import * as sync from '../sync.js';
 import { getRatesToken, setRatesToken } from '../rates.js';
 import { t } from '../texts.js';
+import { cardEnabled } from './dashboard.js';
 
 const CARD_LABELS = {
   summary: 'თვის მიმოხილვა', income: 'შემოსავალი', rate: 'კურსი', georgia: 'საქართველოში გადასარიცხი',
   savings: 'დანაზოგები', year: 'მიმოხილვა პერიოდით',
-  due: 'ამ თვეში გადასახდელი (დარჩენილი)', envelopes: 'ხარჯები (კვება, საწვავი)', split: 'ხელფასის განაწილება', extras: 'დამატებითი ხარჯები'
+  due: 'ამ თვეში გადასახდელი (დარჩენილი)', envelopes: 'ხარჯები (კვება, საწვავი)', split: 'ხელფასის განაწილება', extras: 'დამატებითი ხარჯები',
+  payday: 'ხელფასის დღე — გადარიცხვები', calendar: 'მომდევნო ჩამოჭრები', bank: 'ბანკის ნაშთი', reserve: 'იშვიათი გადასახადების რეზერვი',
+  close: 'თვის დახურვა', trends: 'კატეგორიების გრაფიკი', fx: 'ლარის კურსის გავლენა', whatif: 'რა იქნება, თუ…'
 };
 
 function summaryText(sum) {
@@ -46,14 +51,58 @@ export function renderSettings(root) {
   const adminBtn = el('button', { class: 'btn btn--primary', type: 'button', text: '🛠 ადმინი — ტექსტების და სახელების შეცვლა' });
   adminBtn.addEventListener('click', () => navigate('admin'));
   container.appendChild(el('div', { class: 'btn-row' }, [adminBtn]));
-  container.appendChild(renderSplitSettings());
-  container.appendChild(renderAppearance());
-  container.appendChild(renderSync());
-  container.appendChild(renderRestore());
-  container.appendChild(renderMonths());
-  container.appendChild(renderDataSection());
-  container.appendChild(renderDangerZone());
+  // v20: every section folds (only its title shows) — the page is short; open ones are remembered
+  const openSet = new Set(getUiPref('settingsOpen', []));
+  [
+    ['features', renderFeatures], ['split', renderSplitSettings], ['look', renderAppearance], ['sync', renderSync],
+    ['restore', renderRestore], ['months', renderMonths], ['data', renderDataSection], ['danger', renderDangerZone]
+  ].forEach(([id, fn]) => container.appendChild(accordion(id, fn(), openSet)));
   container.appendChild(el('p', { class: 'version-note', text: `აპის ვერსია ${APP_VERSION} · მონაცემების ფორმატი v${getState().version}. აპის განახლება მონაცემებს არ შლის: ისინი ამ მოწყობილობაზე და ღრუბელშია, ფორმატის ცვლილებამდე კი ავტომატურად იქმნება აღდგენის წერტილი „აპის განახლებამდე".` }));
+}
+
+/** Turns a settings card into a folding section: its title becomes the always-visible summary. */
+function accordion(id, card, openSet) {
+  const title = card.querySelector(':scope > .card__title, :scope > h3');
+  const details = el('details', { class: `card settings-acc${card.classList.contains('danger-zone') ? ' settings-acc--danger' : ''}`, 'data-section': id });
+  const summary = el('summary', { class: 'settings-acc__title' });
+  if (title) { [...title.childNodes].forEach(n => summary.appendChild(n)); [...title.attributes].forEach(a => { if (a.name.startsWith('data-')) summary.setAttribute(a.name, a.value); }); title.remove(); }
+  details.appendChild(summary);
+  const body = el('div', { class: 'settings-acc__body' });
+  [...card.childNodes].forEach(n => body.appendChild(n));
+  details.appendChild(body);
+  if (openSet.has(id)) details.open = true;
+  details.addEventListener('toggle', () => {
+    const set = new Set(getUiPref('settingsOpen', []));
+    if (details.open) set.add(id); else set.delete(id);
+    setUiPref('settingsOpen', [...set]);
+  });
+  return details;
+}
+
+/** Opens the folded section that holds element #id and scrolls to it (links from other pages). */
+export function revealInSettings(id) {
+  const target = document.getElementById(id);
+  const d = target && target.closest('details');
+  if (d) d.open = true;
+  if (target) target.scrollIntoView({ behavior: 'smooth' });
+}
+
+// ---------------- 🧩 Features on/off (v20) ----------------
+
+function renderFeatures() {
+  const card = el('div', { class: 'card' });
+  card.appendChild(el('div', { class: 'card__title', text: '🧩 ფუნქციები — ჩართვა / გამორთვა' }));
+  card.appendChild(el('p', { class: 'card__sub', text: 'გამორთული ფუნქცია არსად ჩანს და ეკრანი მსუბუქდება. მონაცემები არ იშლება — ჩართვისას ყველაფერი ისევ ადგილზეა. ცვლილება ორივე მოწყობილობაზე სინქრონდება.' }));
+  FEATURES.forEach(([key, name, desc]) => {
+    const cb = el('input', { type: 'checkbox', 'data-feature': key });
+    cb.checked = isOn(key);
+    cb.addEventListener('change', () => {
+      updateState(d => { d.settings.features = { ...(d.settings.features || {}), [key]: cb.checked }; return d; });
+      toast(cb.checked ? `ჩაირთო: ${name}` : `გამოირთო: ${name}`);
+    });
+    card.appendChild(el('label', { class: 'feature-row' }, [cb, el('span', { class: 'feature-row__text' }, [el('strong', { text: name }), el('span', { class: 'card__sub', text: desc })])]));
+  });
+  return card;
 }
 
 // ---------------- Salary split + exchange rate ----------------
@@ -92,13 +141,14 @@ function renderSplitSettings() {
   salaryDay.addEventListener('change', () => {
     const v = Math.round(Number(salaryDay.value));
     if (!(v >= 0 && v <= 31)) { toast('ჩაწერე რიცხვი 1-დან 31-მდე (0 = გამორთული)', 'error'); return; }
-    updateState(d => { d.settings.salaryDay = v; return d; });
-    toast('შენახულია ✓');
+    // v20: months that already started keep their date — only new months follow the new day
+    updateState(d => { freezeSalaryDates(d); d.settings.salaryDay = v; return d; });
+    toast('შენახულია ✓ — მოქმედებს ახალ თვეებზე');
   });
   card.appendChild(el('div', { class: 'field' }, [
-    el('label', { text: '💶 ხელფასის ჩარიცხვის დღე' }),
+    el('label', { text: '💶 ხელფასის ჩარიცხვის ჩვეულებრივი დღე (ახალი თვეებისთვის)' }),
     salaryDay,
-    el('div', { class: 'card__sub', text: 'ამ დღიდან ყველა ხარჯი შემდეგი თვის ბიუჯეტშია: დეშბორდი, „დღეს" ღილაკი, „შემდეგი თვის მომზადება" და „ამ თვეშიც დაემატოს" შემდეგ თვეს აჩვენებს. 0 = ჩვეულებრივი კალენდარული თვე.' })
+    el('div', { class: 'card__sub', text: 'ამ დღიდან ხარჯი შემდეგი თვის ბიუჯეტშია. თუ რომელიმე თვეს ხელფასი სხვა დღეს ჩაირიცხა — შეცვალე იმ თვის „შემოსავალი" ბარათზე („💶 ამ თვის ხელფასი ჩაირიცხა"); სხვა თვეები არ შეიცვლება. აქ ცვლილება წინა თვეებს აღარ ეხება. 0 = ჩვეულებრივი კალენდარული თვე.' })
   ]));
 
   const autoBox = el('input', { type: 'checkbox' });
@@ -193,8 +243,10 @@ function renderAppearance() {
     const s = getState();
     const order = effectiveCardOrder(s.settings, s.categories);
     orderList.innerHTML = '';
+    const off = new Set(order.filter(k => !cardEnabled(k, s.settings)));
     const hidden = new Set(s.settings.hiddenCards || []);
     order.forEach((key, idx) => {
+      if (off.has(key)) return; // its feature is switched off (🧩 ფუნქციები)
       const isHidden = hidden.has(key);
       const eye = el('button', { class: 'icon-btn order-list__eye', 'aria-pressed': String(!isHidden), 'aria-label': isHidden ? 'ჩვენება' : 'დამალვა', title: isHidden ? 'ჩვენება დეშბორდზე' : 'დამალვა დეშბორდიდან', text: isHidden ? '🚫' : '👁' });
       eye.addEventListener('click', () => {
@@ -467,6 +519,7 @@ function renderRestore() {
   });
   card.appendChild(el('div', { class: 'btn-row' }, [snapBtn]));
 
+  let shownLocal = 5; // v20: the list grew very long — newest 5, the rest on request
   async function drawLocal() {
     localList.innerHTML = '';
     const items = await listSnapshots();
@@ -474,7 +527,7 @@ function renderRestore() {
       localList.appendChild(el('div', { class: 'card__sub', text: 'ჯერ ასლი არ არის.' }));
       return;
     }
-    items.slice(0, 30).forEach(item => {
+    items.slice(0, shownLocal).forEach(item => {
       const btn = el('button', { class: 'btn btn--secondary btn--sm', text: 'აღდგენა' });
       btn.addEventListener('click', async () => {
         const ok = await confirmDialog(`აღვადგინო ასლი ${fmtDateTime(item.createdAt)}-დან? (${summaryText(item.summary)})\nმიმდინარე მდგომარეობა ჯერ ცალკე ასლად შეინახება.`, { confirmLabel: 'აღდგენა' });
@@ -519,6 +572,11 @@ function renderRestore() {
       const meta = el('div', {}, [el('div', { text: `${SNAPSHOT_REASONS[item.reason] || item.reason} · ${summaryText(item.summary)}` }), status]);
       localList.appendChild(restoreRow(fmtDateTime(item.createdAt), meta, el('div', { class: 'restore-row__actions' }, [btn, shareBtn, delBtn])));
     });
+    if (items.length > shownLocal) {
+      const more = el('button', { type: 'button', class: 'btn btn--ghost btn--sm restore-more', text: `▼ ძველი ასლები (${items.length - shownLocal})` });
+      more.addEventListener('click', () => { shownLocal += 10; drawLocal(); });
+      localList.appendChild(more);
+    }
   }
   drawLocal();
 

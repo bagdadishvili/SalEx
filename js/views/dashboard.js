@@ -11,12 +11,17 @@ import { computeDashboard, effectiveCardOrder, formatMoney, planFor } from '../c
 import { el, toast } from '../ui.js';
 import { renderMonthNav } from '../components.js';
 import { navigate } from '../app.js';
+import { revealInSettings } from './settings.js';
 import { summaryCard, incomeCard, rateCard, autoRefreshRate } from './dash/top.js';
 import { dueCard, georgiaCard, categoryCard } from './dash/blocks.js';
 import { savingsCard } from './dash/savings.js';
 import { envelopesCard, extrasCard } from './dash/budgets.js';
 import { splitCard } from './dash/split.js';
 import { yearCard } from './dash/period.js';
+import { paydayCard, calendarCard, bankCard } from './dash/flow.js';
+import { reserveCard, closeCard } from './dash/planning.js';
+import { trendsCard, fxCard, whatIfCard } from './dash/analysis.js';
+import { isOn } from '../features.js';
 
 /** Fixed cards: key → renderer(ctx) returning a card (or an array of cards, or []). */
 const CARD_RENDERERS = {
@@ -29,8 +34,33 @@ const CARD_RENDERERS = {
   due: dueCard,
   envelopes: envelopesCard,
   extras: extrasCard,
-  split: splitCard
+  split: splitCard,
+  payday: paydayCard,
+  calendar: calendarCard,
+  bank: bankCard,
+  reserve: reserveCard,
+  close: closeCard,
+  trends: trendsCard,
+  fx: fxCard,
+  whatif: whatIfCard
 };
+
+/** Optional cards and the feature (Settings → 🧩 ფუნქციები) that switches them on. */
+const CARD_FEATURE = { payday: 'payday', calendar: 'calendar', bank: 'bank', reserve: 'reserve', close: 'close', trends: 'trends', fx: 'fx', whatif: 'whatIf' };
+
+/**
+ * v20: the dashboard is split into sections, so each one is short (less scrolling).
+ * Category blocks belong to "ფული". "ყველა" shows everything in one list as before.
+ */
+export const DASH_SECTIONS = [['main', '📋 მთავარი'], ['money', '💶 ფული'], ['analysis', '📊 ანალიზი'], ['all', 'ყველა']];
+const SECTION_OF = {
+  summary: 'main', due: 'main', payday: 'main', calendar: 'main', close: 'main', envelopes: 'main', extras: 'main',
+  income: 'money', rate: 'money', bank: 'money', georgia: 'money', savings: 'money', reserve: 'money', split: 'money',
+  year: 'analysis', trends: 'analysis', fx: 'analysis', whatif: 'analysis'
+};
+export const sectionOf = (cardKey) => SECTION_OF[cardKey] || 'money';
+/** Is this card switched on (its feature, if it has one)? */
+export const cardEnabled = (cardKey, settings) => !CARD_FEATURE[cardKey] || isOn(CARD_FEATURE[cardKey], settings);
 
 let unsubscribe = null;
 
@@ -42,6 +72,19 @@ export function renderDashboard(root) {
 
   let monthNav = renderMonthNav(() => draw());
   container.appendChild(monthNav);
+
+  const sectionTabs = el('div', { class: 'segmented dash-sections', role: 'tablist', 'aria-label': 'დეშბორდის ნაწილი' });
+  container.appendChild(sectionTabs);
+  const drawTabs = () => {
+    const cur = getUiPref('dashSection', 'main');
+    sectionTabs.innerHTML = '';
+    DASH_SECTIONS.forEach(([id, label]) => {
+      const b = el('button', { type: 'button', class: 'segmented__btn', role: 'tab', 'aria-pressed': String(cur === id), 'aria-selected': String(cur === id), text: label });
+      b.addEventListener('click', () => { setUiPref('dashSection', id); drawTabs(); draw(); window.scrollTo({ top: 0 }); });
+      sectionTabs.appendChild(b);
+    });
+  };
+  drawTabs();
 
   const cardsWrap = el('div', { class: 'card-grid' });
   container.appendChild(cardsWrap);
@@ -81,7 +124,9 @@ export function renderDashboard(root) {
       prepareCards(state, key, (k) => openPrepareWizard(k, () => goToMonth(k)), draw).forEach(c => cardsWrap.appendChild(c));
     }
     const hidden = new Set(settings.hiddenCards || []);
-    const order = effectiveCardOrder(settings, categories).filter(k => !hidden.has(k));
+    const section = getUiPref('dashSection', 'main');
+    const order = effectiveCardOrder(settings, categories)
+      .filter(k => !hidden.has(k) && cardEnabled(k, settings) && (section === 'all' || sectionOf(k) === section));
     const ctx = { month, key, dash, categories, settings, state, rerender: draw, goToMonth };
 
     order.forEach(cardKey => {
@@ -95,12 +140,15 @@ export function renderDashboard(root) {
       const b = dash.buckets.find(x => x.id === cardKey);
       if (b) cardsWrap.appendChild(categoryCard(b, ctx));
     });
+    if (!cardsWrap.querySelector('.card:not(.prepare-card)')) {
+      cardsWrap.appendChild(el('div', { class: 'empty-state', text: 'ამ ნაწილში ბარათი არ არის (დამალულია ან ფუნქცია გამორთულია) — პარამეტრები → 🧩 ფუნქციები / დეშბორდის ბლოკები.' }));
+    }
   }
 
   const customize = el('div', { class: 'dash-customize' }, [
     el('button', { class: 'btn btn--ghost btn--sm', type: 'button', text: '⚙️ ბლოკების დამალვა / გადაადგილება' })
   ]);
-  customize.firstChild.addEventListener('click', () => { navigate('settings'); setTimeout(() => document.getElementById('dashboard-layout')?.scrollIntoView({ behavior: 'smooth' }), 50); });
+  customize.firstChild.addEventListener('click', () => { navigate('settings'); setTimeout(() => revealInSettings('dashboard-layout'), 50); });
   container.appendChild(customize);
 
   /** Jump to another month (from the period table) and keep the selector in sync. */

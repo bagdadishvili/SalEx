@@ -28,7 +28,7 @@ export function dueCard(ctx) {
   card.appendChild(el('div', { class: 'stat-card__sub tabular-nums', text: `${rem.next.length} გადასახადი გადასახდელია (დანაზოგი და კვება/საწვავი აქ არ ითვლება)` }));
   const acc = el('div', { class: 'due-card__accounts tabular-nums' });
   Object.entries(rem.billsByAccount).forEach(([a, v]) => {
-    if (v > 0.004) acc.appendChild(el('span', { class: 'chip', text: `${personTag(a)}: ${formatMoney(v, 'EUR', 0)}` }));
+    if (v > 0.004) acc.appendChild(el('span', { class: `chip chip--p-${a}`, text: `${personTag(a)}: ${formatMoney(v, 'EUR', 0)}` }));
   });
   card.appendChild(acc);
   // v19: bills from a personal account — what still has to be moved there / waits for the bank

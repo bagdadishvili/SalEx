@@ -45,6 +45,25 @@ export function navigate(route) {
   });
 }
 
+/**
+ * Bottom menu (v20): every tab name is shown in FULL on one line — never cut with "…" and never
+ * split. Tabs take the width their name needs, and if the names still do not fit, the font
+ * shrinks a little (down to 8 px) until every name fits.
+ */
+let fitTimer = null;
+function fitNavLabels() {
+  if (!tabBar || (window.matchMedia && window.matchMedia('(min-width: 860px)').matches)) { tabBar && tabBar.style.removeProperty('--tab-label-size'); return; }
+  const labels = [...tabBar.querySelectorAll('.tab-bar__label')];
+  const overflow = () => labels.some(l => l.scrollWidth > l.clientWidth + 0.5) || tabBar.scrollWidth > tabBar.clientWidth + 0.5;
+  let size = 11;
+  tabBar.style.setProperty('--tab-label-size', `${size}px`);
+  while (overflow() && size > 8) {
+    size -= 0.5;
+    tabBar.style.setProperty('--tab-label-size', `${size}px`);
+  }
+}
+if (typeof window !== 'undefined') window.addEventListener('resize', () => { clearTimeout(fitTimer); fitTimer = setTimeout(fitNavLabels, 120); });
+
 /** Applies the user's own texts to the fixed parts of the page (title, tab bar). */
 function applyTexts() {
   const title = document.querySelector('.app-header__title');
@@ -55,7 +74,11 @@ function applyTexts() {
     const key = `tab.${btn.dataset.route}`;
     label.textContent = t(key);
     label.setAttribute('data-tkey', key);
+    btn.setAttribute('aria-label', t(key));
   });
+  fitNavLabels();
+  // the web font may arrive a moment later and change the widths
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitNavLabels).catch(() => {});
 }
 
 const scrollByRoute = {}; // e.g. come back to the dashboard exactly where you left it
@@ -334,7 +357,7 @@ function askNewText(key, current, def) {
 }
 
 /** Shown in Settings; bump together with CACHE_VERSION in sw.js. */
-export const APP_VERSION = '19';
+export const APP_VERSION = '20';
 
 export { applyAppearance };
 

@@ -1,6 +1,6 @@
 // views/dash/top.js — month overview, income and exchange-rate cards (+ automatic rate refresh).
 
-import { getState, updateState, budgetMonthKey } from '../../state.js';
+import { getState, updateState, budgetMonthKey, salaryStart } from '../../state.js';
 import { computeMonthOverview, formatMoney } from '../../calc.js';
 import { el, savedToast, toast, formatDate } from '../../ui.js';
 import { tx, personName } from '../../texts.js';
@@ -98,6 +98,20 @@ export function incomeCard({ month, key, rerender }) {
   });
   card.appendChild(row);
   card.appendChild(el('div', { class: 'stat-card__sub tabular-nums', text: `ჯამი: ${formatMoney(month.income.giorgi + month.income.nino, 'EUR')}` }));
+  // v20: the day THIS month's salary arrived — every month can have its own date
+  const s = getState();
+  if ((Number(s.settings.salaryDay) || 0) > 0 || month.salaryDate) {
+    const date = el('input', { type: 'date', class: 'salary-date', value: salaryStart(key), 'aria-label': 'ამ თვის ხელფასის ჩარიცხვის დღე' });
+    date.addEventListener('change', () => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date.value)) return;
+      updateState(d => { d.months[key].salaryDate = date.value; return d; });
+      toast('შენახულია ✓ — მხოლოდ ამ თვისთვის');
+      rerender();
+    });
+    card.appendChild(el('label', { class: 'salary-date-row' }, [
+      el('span', { class: 'stat-card__sub', text: '💶 ამ თვის ხელფასი ჩაირიცხა:' }), date
+    ]));
+  }
   return card;
 }
 

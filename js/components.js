@@ -139,7 +139,8 @@ export const PAYER_LABELS = {
 
 /** "👨 გიორგი" / "👩 ნინო" — who pays (from whose bank account). */
 export function payerChip(account) {
-  return el('span', { class: 'chip chip--account', title: 'ვინ იხდის (ვისი ანგარიშიდან)', text: personTag(account) });
+  const who = ['giorgi', 'nino'].includes(account) ? account : 'shared';
+  return el('span', { class: `chip chip--account chip--p-${who}`, title: 'ვინ იხდის (ვისი ანგარიშიდან)', text: personTag(account) });
 }
 
 export function georgiaChip() {
