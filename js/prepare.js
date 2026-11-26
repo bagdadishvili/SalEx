@@ -118,7 +118,7 @@ export function openPrepareWizard(initialKey, onDone = () => {}) {
     // Step 2 — expenses
     const step2 = el('section', { class: 'prep__step' }, [el('h3', { text: '2. რა ხარჯები შედის ამ თვეში' })]);
     if (!rows.length) {
-      step2.appendChild(el('div', { class: 'empty-state', text: state.templates.length ? 'ამ თვეში არცერთი შაბლონი არ მოდის.' : 'შაბლონები ჯერ არ გაქვს — „შაბლონები" გვერდზე „📋 ოჯახის შაბლონების დამატება".' }));
+      step2.appendChild(el('div', { class: 'empty-state', text: state.templates.length ? 'ამ თვეში არცერთი შაბლონი არ მოდის.' : 'შაბლონები ჯერ არ გაქვს — დაამატე „შაბლონები“ გვერდზე ან გამოიყენე „📂 შაბლონების ფაილიდან დამატება“.' }));
     }
     const groupTotals = {};
     GROUPS.forEach(([g, title]) => {

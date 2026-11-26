@@ -21,6 +21,7 @@ let unsubscribe = null;
 let statusFilter = 'all'; // all | unpaid | moved (transferred, not yet debited) | paid
 let ownerFilter = 'all';  // all | giorgi | nino | shared
 let groupByBucket = false;
+let searchQuery = '';
 
 /** Lets other pages open this list pre-filtered (e.g. dashboard "still to pay" → unpaid). */
 export function setTransactionsFilter(status = 'all', owner = 'all') {
@@ -37,13 +38,20 @@ export function renderTransactions(root) {
   const monthNav = renderMonthNav(() => draw());
   container.appendChild(monthNav);
 
-  const toolbar = el('div', { class: 'btn-row' });
+  const toolbar = el('div', { class: 'btn-row btn-row--split' });
   const addBtn = el('button', { class: 'btn btn--primary', ...tx('btn.newExpense') });
   const regenBtn = el('button', { class: 'btn btn--secondary', ...tx('btn.prepare') });
   toolbar.append(addBtn, regenBtn);
   container.appendChild(toolbar);
   const prepBanner = el('div', {});
   container.appendChild(prepBanner);
+
+  // v21: quick search by name or note
+  const searchIn = el('input', { type: 'search', class: 'tpl-search txn-search__input', placeholder: '🔍 ძებნა სახელით ან შენიშვნით…', value: searchQuery, 'aria-label': 'ტრანზაქციების ძებნა' });
+  const clearSearchBtn = el('button', { type: 'button', class: 'icon-btn icon-btn--sm txn-search__clear', 'aria-label': 'ძებნის გასუფთავება', text: '✕', hidden: searchQuery ? null : 'true' });
+  searchIn.addEventListener('input', () => { searchQuery = searchIn.value; clearSearchBtn.hidden = !searchQuery; draw(); });
+  clearSearchBtn.addEventListener('click', () => { searchQuery = ''; searchIn.value = ''; clearSearchBtn.hidden = true; draw(); searchIn.focus(); });
+  container.appendChild(el('div', { class: 'txn-search' }, [searchIn, clearSearchBtn]));
 
   // v20: all filters in ONE row that scrolls sideways — three rows took half a phone screen
   const statusRow = el('div', { class: 'filter-row filter-row--scroll' });
@@ -132,6 +140,8 @@ export function renderTransactions(root) {
     statusBtns.moved.hidden = !month.transactions.some(t => isTwoStep(t, categories)) && statusFilter !== 'moved';
     if (statusFilter === 'paid') txns = txns.filter(t => t.paid || (isEnvelope(t) && envelopeSpent(t) > 0));
     if (ownerFilter !== 'all') txns = txns.filter(t => (t.account || 'shared') === ownerFilter);
+    const q = searchQuery.trim().toLowerCase();
+    if (q) txns = txns.filter(t => (t.name || '').toLowerCase().includes(q) || (t.note || '').toLowerCase().includes(q));
     txns.sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
 
     // Totals for the currently visible (filtered) set.
@@ -143,9 +153,18 @@ export function renderTransactions(root) {
 
     list.innerHTML = '';
     if (txns.length === 0) {
+      const hasFilter = statusFilter !== 'all' || ownerFilter !== 'all' || !!q;
+      const resetBtn = hasFilter ? el('button', { type: 'button', class: 'btn btn--secondary btn--sm', text: '↺ ფილტრების გასუფთავება' }) : null;
+      if (resetBtn) {
+        resetBtn.addEventListener('click', () => {
+          statusFilter = 'all'; ownerFilter = 'all'; searchQuery = ''; searchIn.value = ''; clearSearchBtn.hidden = true;
+          drawFilterState(); draw();
+        });
+      }
       list.appendChild(el('div', { class: 'empty-state' }, [
         el('div', { class: 'empty-state__icon', text: '💳' }),
-        el('div', { text: 'ტრანზაქციები არ მოიძებნა' })
+        el('div', { text: hasFilter ? 'არჩეულ ფილტრს არაფერი შეესაბამება' : 'ამ თვეში ჩანაწერები ჯერ არ არის' }),
+        resetBtn ? el('div', { class: 'btn-row', style: 'justify-content:center' }, [resetBtn]) : null
       ]));
       return;
     }
@@ -506,7 +525,7 @@ function offerTemplateUpdate(before, onDone) {
       const tp = d.templates.find(x => x.id === tpl.id);
       if (!tp) return d;
       diff.forEach(x => {
-        if (x.field === 'day') tp.firstDueDate = `${tp.firstDueDate.slice(0, 8)}${x.value}`;
+        if (x.field === 'day' && tp.firstDueDate && tp.firstDueDate.length >= 8) tp.firstDueDate = `${tp.firstDueDate.slice(0, 8)}${x.value}`;
         else if (x.field === 'account') { tp.account = x.value; tp.owner = x.value; } else tp[x.field] = x.value;
       });
       return d;
@@ -546,7 +565,7 @@ export function openTransactionForm(existing, monthKeyStr, onSaved, presets = {}
   // v19: a bill from a personal account — is the money already moved to that account?
   const movedBox = el('input', { type: 'checkbox' });
   movedBox.checked = !!(existing && existing.transferredAt);
-  const movedField = el('label', { class: 'field checkbox-field' }, [movedBox, el('span', { text: '⇄ გადატანილია — ფული უკვე ამ ანგარიშზეა, ბანკი ჯერ არ ჩამოჭრა' })]);
+  const movedField = el('label', { class: 'field checkbox-field' }, [movedBox, el('span', { text: '⇄ გადატანილია — ფული ამ ანგარიშზეა, ჩამოჭრის მოლოდინში' })]);
   const syncMoved = () => {
     const probe = { ...(existing || {}), kind: existing?.kind, account: accountSelect.value, categoryId: categorySelect.value };
     movedField.hidden = !isTwoStep(probe, state.categories) || !!existing?.paid;
@@ -576,7 +595,7 @@ export function openTransactionForm(existing, monthKeyStr, onSaved, presets = {}
   const typeSelect = el('select', {}, [
     el('option', { value: 'fixed', text: 'ფიქსირებული' }),
     el('option', { value: 'variable', text: 'ცვლადი' }),
-    el('option', { value: 'envelope', text: '🛒 ბიუჯეტი (ნელ-ნელა იხარჯება)' })
+    el('option', { value: 'envelope', text: '🛒 ყოველდღიური ბიუჯეტი' })
   ]);
   const tplExtra = el('div', { class: 'field-row', hidden: 'true' }, [
     el('div', { class: 'field' }, [el('label', { text: 'რამდენად ხშირად' }), cycleSelect]),
@@ -615,12 +634,12 @@ export function openTransactionForm(existing, monthKeyStr, onSaved, presets = {}
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     const name = nameInput.value.trim();
-    if (!name) { toast('შეავსეთ სახელი', 'error'); return; }
+    if (!name) { toast('შეავსე სახელი', 'error'); return; }
     const paidAmount = paidInput ? parseAmountInput(paidInput.value) : null;
-    if (paidInput && !(paidAmount > 0)) { toast('შეიყვანეთ სწორი გადახდილი თანხა', 'error'); return; }
+    if (paidInput && !(paidAmount > 0)) { toast('ჩაწერე სწორი გადახდილი თანხა', 'error'); return; }
     // a "from savings" entry has no plan of its own (planned 0) — only the paid amount
     const amount = fromSav ? 0 : parseAmountInput(amountInput.value);
-    if (!fromSav && amount <= 0) { toast('შეიყვანეთ სწორი თანხა', 'error'); return; }
+    if (!fromSav && amount <= 0) { toast('ჩაწერე სწორი თანხა', 'error'); return; }
 
     let madeTemplate = false;
     updateState(draft => {

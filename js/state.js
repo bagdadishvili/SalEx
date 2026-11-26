@@ -557,10 +557,10 @@ export function saveStateImmediate() {
 
 function showQuotaError() {
   const el = document.getElementById('toast-root');
-  if (!el) { alert('შენახვის შეცდომა — გთხოვთ, დაუყოვნებლივ გააკეთოთ JSON ექსპორტი, სივრცე ამოწურულია.'); return; }
+  if (!el) { alert('შენახვის შეცდომა — დაუყოვნებლივ გააკეთე JSON ექსპორტი, სივრცე ამოწურულია.'); return; }
   const div = document.createElement('div');
   div.className = 'toast toast--error';
-  div.textContent = 'შენახვის შეცდომა! გთხოვთ დაუყოვნებლივ გააკეთოთ JSON ექსპორტი — სივრცე ამოწურულია.';
+  div.textContent = 'შენახვის შეცდომა! დაუყოვნებლივ გააკეთე JSON ექსპორტი — სივრცე ამოწურულია.';
   el.appendChild(div);
   setTimeout(() => div.remove(), 6000);
 }

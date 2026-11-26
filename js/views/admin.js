@@ -9,7 +9,7 @@ import { navigate, collectAllTexts } from '../app.js';
 import { revealInSettings } from './settings.js';
 
 const PAGE_NAMES = {
-  dashboard: '🏠 დეშბორდი', transactions: '💳 ტრანზაქციები', templates: '🧾 შაბლონები', categories: '🏷️ კატეგორიები',
+  dashboard: '🏠 მთავარი', transactions: '💳 ხარჯები', templates: '🧾 შაბლონები', categories: '🏷️ გეგმა',
   settings: '⚙️ პარამეტრები', assistant: '🤖 AI', admin: '🛠 ადმინი', '': 'სხვა'
 };
 const pageName = (p) => {

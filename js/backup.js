@@ -5,7 +5,7 @@
 
 const DB_NAME = 'familyBudget.backups';
 const STORE = 'snapshots';
-const MAX_SNAPSHOTS = 40;
+const MAX_SNAPSHOTS = 15;
 
 export const SNAPSHOT_REASONS = {
   daily: 'ავტომატური (დღიური)',
@@ -125,6 +125,28 @@ export async function deleteSnapshot(id) {
   const tx = db.transaction(STORE, 'readwrite');
   tx.objectStore(STORE).delete(id);
   await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); });
+}
+
+/**
+ * Bulk cleanup of local restore points (v21):
+ *  - onlyShared: true → removes snapshots already sent out via share sheet (Drive/mail);
+ *  - otherwise keeps the newest `keepLast` snapshots and deletes the rest in one transaction.
+ * Copies sent to Drive/mail and cloud Gist history are never touched.
+ */
+export async function pruneSnapshots({ keepLast = 3, onlyShared = false } = {}) {
+  const db = await openDb();
+  const records = await allRecords(db);
+  records.sort((a, b) => b.id - a.id);
+  const keep = Math.max(0, Math.round(Number(keepLast) || 0));
+  const toDelete = onlyShared
+    ? records.filter(r => !!r.sharedAt)
+    : records.slice(keep);
+  if (!toDelete.length) return { deleted: 0, kept: records.length };
+  const tx = db.transaction(STORE, 'readwrite');
+  const store = tx.objectStore(STORE);
+  toDelete.forEach(r => store.delete(r.id));
+  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); });
+  return { deleted: toDelete.length, kept: records.length - toDelete.length };
 }
 
 /** Saves a snapshot only if none was made in the last `hours` hours. */

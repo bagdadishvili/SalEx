@@ -34,7 +34,7 @@ export function savingsCard(ctx) {
     const g = goalsOn ? goalProgress(cat, r.balance, ctx.key) : null;
     let goalRow = null;
     if (goalsOn) {
-      const goalBtn = el('button', { type: 'button', class: 'link-btn', text: g ? `🎯 ${m0(g.goal)}${g.by ? ` · ${g.by.slice(5, 7)}.${g.by.slice(0, 4)}-მდე` : ''}` : '🎯 მიზნის დასმა' });
+      const goalBtn = el('button', { type: 'button', class: 'link-btn', text: g ? `🎯 ${m0(g.goal)}${g.by ? ` · ${g.by.slice(5, 7)}.${g.by.slice(0, 4)}-მდე` : ''}` : '🎯 მიზნის დამატება' });
       goalBtn.addEventListener('click', (e) => { e.stopPropagation(); openGoalDialog(cat, ctx); });
       goalRow = el('div', { class: 'goal-row' }, [
         goalBtn,
@@ -66,7 +66,7 @@ export function savingsCard(ctx) {
   totals.appendChild(el('tbody', {}, [
     so.short.planned > 0.004 ? row('მოკლევადიანი', so.short) : null,
     so.long.planned > 0.004 ? row('გრძელვადიანი', so.long) : null,
-    row('სულ ორივემ', so.total, 'savings-totals__all')
+    row('ჯამში', so.total, 'savings-totals__all')
   ].filter(Boolean)));
   card.appendChild(totals);
   const toggle = () => { if (expanded.has('savings')) expanded.delete('savings'); else expanded.add('savings'); rerender(); };

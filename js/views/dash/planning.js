@@ -49,7 +49,7 @@ export function closeCard(ctx) {
   const { month, key, rerender } = ctx;
   const cur = budgetMonthKey();
   if (month.closedAt) {
-    const reopen = el('button', { type: 'button', class: 'btn btn--ghost btn--sm', text: '↺ ხელახლა გახსნა' });
+    const reopen = el('button', { type: 'button', class: 'btn btn--ghost btn--sm close-card__reopen', text: '↺ ხელახლა გახსნა' });
     reopen.addEventListener('click', () => { updateState(d => { delete d.months[key].closedAt; return d; }); rerender(); });
     return el('div', { class: 'card stat-card stat-card--wide close-card close-card--done' }, [
       el('div', { class: 'stat-card__label', text: `🔒 თვე დახურულია (${month.closedAt.slice(8, 10)}.${month.closedAt.slice(5, 7)})` }), reopen
@@ -105,7 +105,7 @@ function openCloseDialog(ctx) {
     saveCb = el('input', { type: 'checkbox' });
     saveAmt = el('input', { type: 'text', inputmode: 'decimal', class: 'prep__amount tabular-nums', value: leftover.toFixed(2).replace('.', ',') });
     saveSel = el('select', { class: 'close-form__sel', 'aria-label': 'რომელ დანაზოგზე' }, savs.map(c => el('option', { value: c.id, text: `${c.name} · ${personTag(c.owner || 'shared')}` })));
-    form.appendChild(el('label', { class: 'prep__row' }, [saveCb, el('span', { class: 'prep__name', text: `გადახდილის მიხედვით დარჩა ${formatMoney(leftover, 'EUR', 0)} — გადავიტანე დანაზოგზე:` })]));
+    form.appendChild(el('label', { class: 'prep__row' }, [saveCb, el('span', { class: 'prep__name', text: `გადახდილის მიხედვით დარჩა ${formatMoney(leftover, 'EUR', 0)} — დანაზოგზე გადატანა:` })]));
     form.appendChild(el('div', { class: 'field-row' }, [el('div', { class: 'field' }, [saveAmt]), el('div', { class: 'field' }, [saveSel])]));
   }
   form.appendChild(el('div', { class: 'btn-row' }, [el('button', { class: 'btn btn--primary', type: 'submit', text: '🔒 დახურვა' })]));

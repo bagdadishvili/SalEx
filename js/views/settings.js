@@ -8,7 +8,7 @@ import { FEATURES, isOn } from '../features.js';
 import { getUiPref, setUiPref } from '../monthNav.js';
 import { effectiveCardOrder } from '../calc.js';
 import { el, confirmDialog, toast, openModal } from '../ui.js';
-import { listSnapshots, getSnapshotData, saveSnapshot, summarizeState, SNAPSHOT_REASONS, markSnapshotShared, deleteSnapshot } from '../backup.js';
+import { listSnapshots, getSnapshotData, saveSnapshot, summarizeState, SNAPSHOT_REASONS, markSnapshotShared, deleteSnapshot, pruneSnapshots } from '../backup.js';
 import { exportJson, importJson, exportCsv, importCsv } from '../exporter.js';
 import { applyAppearance, APP_VERSION, navigate } from '../app.js';
 import { budgetMonthKey } from '../state.js';
@@ -19,14 +19,15 @@ import { COLOR_PRESETS } from '../components.js';
 import * as sync from '../sync.js';
 import { getRatesToken, setRatesToken } from '../rates.js';
 import { t } from '../texts.js';
-import { cardEnabled } from './dashboard.js';
+import { cardEnabled, DASH_SECTIONS, sectionOf } from './dashboard.js';
+import { runDiagnostics, diagnosticsText } from '../diagnostics.js';
 
 const CARD_LABELS = {
   summary: 'თვის მიმოხილვა', income: 'შემოსავალი', rate: 'კურსი', georgia: 'საქართველოში გადასარიცხი',
-  savings: 'დანაზოგები', year: 'მიმოხილვა პერიოდით',
-  due: 'ამ თვეში გადასახდელი (დარჩენილი)', envelopes: 'ხარჯები (კვება, საწვავი)', split: 'ხელფასის განაწილება', extras: 'დამატებითი ხარჯები',
-  payday: 'ხელფასის დღე — გადარიცხვები', calendar: 'მომდევნო ჩამოჭრები', bank: 'ბანკის ნაშთი', reserve: 'იშვიათი გადასახადების რეზერვი',
-  close: 'თვის დახურვა', trends: 'კატეგორიების გრაფიკი', fx: 'ლარის კურსის გავლენა', whatif: 'რა იქნება, თუ…'
+  savings: 'დანაზოგები', year: 'პერიოდის მიმოხილვა',
+  due: 'დარჩენილი გადასახადები', envelopes: 'ყოველდღიური ბიუჯეტი', split: 'ხელფასის განაწილება (50/50)', extras: 'დამატებითი ხარჯები',
+  payday: 'ხელფასის დღე', calendar: 'მომდევნო ჩამოჭრები', bank: 'ბანკის ნაშთის შემოწმება', reserve: 'იშვიათი ხარჯების რეზერვი',
+  close: 'თვის დახურვა', trends: 'ხარჯების დინამიკა', fx: 'ლარის კურსის გავლენა', whatif: 'ბიუჯეტის სიმულატორი'
 };
 
 function summaryText(sum) {
@@ -48,16 +49,50 @@ export function renderSettings(root) {
   const container = el('div', { class: 'settings-view' });
   root.appendChild(container);
 
-  const adminBtn = el('button', { class: 'btn btn--primary', type: 'button', text: '🛠 ადმინი — ტექსტების და სახელების შეცვლა' });
-  adminBtn.addEventListener('click', () => navigate('admin'));
-  container.appendChild(el('div', { class: 'btn-row' }, [adminBtn]));
   // v20: every section folds (only its title shows) — the page is short; open ones are remembered
   const openSet = new Set(getUiPref('settingsOpen', []));
   [
     ['features', renderFeatures], ['split', renderSplitSettings], ['look', renderAppearance], ['sync', renderSync],
     ['restore', renderRestore], ['months', renderMonths], ['data', renderDataSection], ['danger', renderDangerZone]
   ].forEach(([id, fn]) => container.appendChild(accordion(id, fn(), openSet)));
-  container.appendChild(el('p', { class: 'version-note', text: `აპის ვერსია ${APP_VERSION} · მონაცემების ფორმატი v${getState().version}. აპის განახლება მონაცემებს არ შლის: ისინი ამ მოწყობილობაზე და ღრუბელშია, ფორმატის ცვლილებამდე კი ავტომატურად იქმნება აღდგენის წერტილი „აპის განახლებამდე".` }));
+
+  // v21: utility tools neatly placed below main settings (diagnostics + text editor)
+  const diagBtn = el('button', { class: 'btn btn--secondary', type: 'button', text: '🩺 შემოწმება' });
+  diagBtn.addEventListener('click', () => openDiagnosticsModal());
+  const adminBtn = el('button', { class: 'btn btn--secondary', type: 'button', text: '🛠 ტექსტები' });
+  adminBtn.addEventListener('click', () => navigate('admin'));
+  container.appendChild(el('div', { class: 'btn-row btn-row--split settings-tools' }, [diagBtn, adminBtn]));
+
+  container.appendChild(el('p', { class: 'version-note', text: `ვერსია ${APP_VERSION} · მონაცემების ფორმატი v${getState().version}. განახლება მონაცემებს არ შლის — ისინი ამ მოწყობილობაზე და ღრუბელში ინახება.` }));
+}
+
+/** v21: quick data health-check right from Settings (works even without an AI key). */
+function openDiagnosticsModal() {
+  const state = getState();
+  const findings = runDiagnostics(state, { currentKey: budgetMonthKey() });
+  const notes = state.settings.aiNotes || [];
+  const body = el('div', {});
+  body.appendChild(el('p', { class: 'card__sub', text: 'აპი ამოწმებს ყველა თვეს ურთიერთშეუსაბამობებზე — არაფერს ცვლის, მხოლოდ გაჩვენებს, რა გადაამოწმო.' }));
+  if (!findings.length) {
+    body.appendChild(el('div', { class: 'card__sub text-success', style: 'margin:12px 0;font-weight:600', text: '✓ ყველაფერი რიგზეა — პრობლემა ვერ მოიძებნა.' }));
+  } else {
+    findings.forEach(f => {
+      const title = document.createElement('div');
+      title.className = 'diag-item__title';
+      title.textContent = `${f.month ? `${monthLabelFull(f.month)}: ` : ''}${f.title}`;
+      const fix = document.createElement('div');
+      fix.className = 'diag-item__fix';
+      fix.textContent = f.fix;
+      body.appendChild(el('div', { class: `diag-item diag-item--${f.level}` }, [title, fix]));
+    });
+  }
+  const copy = el('button', { type: 'button', class: 'btn btn--secondary btn--sm', text: '📋 კოპირება' });
+  copy.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(diagnosticsText(findings, notes)); toast('დაკოპირდა ✓'); }
+    catch { toast('კოპირება ვერ მოხერხდა', 'error'); }
+  });
+  body.appendChild(el('div', { class: 'btn-row' }, [copy]));
+  openModal(body, { title: `🩺 მონაცემების შემოწმება (${findings.length})` });
 }
 
 /** Turns a settings card into a folding section: its title becomes the always-visible summary. */
@@ -110,9 +145,9 @@ function renderFeatures() {
 function renderSplitSettings() {
   const state = getState();
   const card = el('div', { class: 'card' });
-  card.appendChild(el('div', { class: 'card__title', text: 'ახალი თვე, ხელფასის განაწილება და კურსი' }));
+  card.appendChild(el('div', { class: 'card__title', text: '⚙️ ბიუჯეტის წესები და კურსი' }));
 
-  card.appendChild(el('p', { class: 'card__sub', text: 'საერთო ხარჯი იყოფა 50/50. დეშბორდის ბარათი „ვინ რამდენი გადარიცხოს" ორ ვარიანტს აჩვენებს: „ჩამოსაჭრელს ანგარიშზე ვიტოვებთ" და „სრულად საერთოზე, მერე უკან".' }));
+  card.appendChild(el('p', { class: 'card__sub', text: 'საერთო ხარჯი იყოფა 50/50. „ხელფასის განაწილება“ აჩვენებს ორ ვარიანტს: „პირადზე დატოვებით“ და „სრულად საერთოზე“.' }));
 
   const basisSelect = el('select', {}, [
     el('option', { value: 'actual', text: 'ზუსტად რეალური გადასახადები (შაბლონებიდან)' }),
@@ -184,7 +219,7 @@ function renderSplitSettings() {
 function renderAppearance() {
   const state = getState();
   const card = el('div', { class: 'card' });
-  card.appendChild(el('div', { class: 'card__title', text: 'გაფორმება' }));
+  card.appendChild(el('div', { class: 'card__title', text: '🎨 გარეგნობა და ბარათები' }));
 
   const themeRow = el('div', { class: 'field' }, [el('label', { text: 'თემა' })]);
   const themeSelect = el('select', {}, [el('option', { value: 'light', text: 'ღია' }), el('option', { value: 'dark', text: 'მუქი' })]);
@@ -227,13 +262,13 @@ function renderAppearance() {
   fontRow.appendChild(fontSelect);
   card.appendChild(fontRow);
 
-  card.appendChild(el('label', { id: 'dashboard-layout', text: 'დეშბორდის ბლოკები — 👁 ჩვენება/დამალვა, ▲▼ თანმიმდევრობა', style: 'font-size:0.85rem;color:var(--text-muted);display:block;margin:16px 0 6px' }));
+  card.appendChild(el('label', { id: 'dashboard-layout', text: 'მთავარი ეკრანის ბარათები — 👁 ჩვენება/დამალვა, ▲▼ თანმიმდევრობა', style: 'font-size:0.85rem;color:var(--text-muted);display:block;margin:16px 0 6px' }));
   const orderList = el('div', { class: 'order-list' });
-  function moveCard(idx, delta) {
+  function swapKeys(keyA, keyB) {
     updateState(draft => {
-      // Work on the effective order (includes every category card), then store it.
       const order = effectiveCardOrder(draft.settings, draft.categories);
-      [order[idx + delta], order[idx]] = [order[idx], order[idx + delta]];
+      const ia = order.indexOf(keyA), ib = order.indexOf(keyB);
+      if (ia >= 0 && ib >= 0) [order[ia], order[ib]] = [order[ib], order[ia]];
       draft.settings.dashboardCardOrder = order;
       return draft;
     });
@@ -241,33 +276,37 @@ function renderAppearance() {
   }
   function drawOrder() {
     const s = getState();
-    const order = effectiveCardOrder(s.settings, s.categories);
+    const order = effectiveCardOrder(s.settings, s.categories).filter(k => cardEnabled(k, s.settings));
     orderList.innerHTML = '';
-    const off = new Set(order.filter(k => !cardEnabled(k, s.settings)));
     const hidden = new Set(s.settings.hiddenCards || []);
-    order.forEach((key, idx) => {
-      if (off.has(key)) return; // its feature is switched off (🧩 ფუნქციები)
-      const isHidden = hidden.has(key);
-      const eye = el('button', { class: 'icon-btn order-list__eye', 'aria-pressed': String(!isHidden), 'aria-label': isHidden ? 'ჩვენება' : 'დამალვა', title: isHidden ? 'ჩვენება დეშბორდზე' : 'დამალვა დეშბორდიდან', text: isHidden ? '🚫' : '👁' });
-      eye.addEventListener('click', () => {
-        updateState(draft => {
-          const list = new Set(draft.settings.hiddenCards || []);
-          if (list.has(key)) list.delete(key); else list.add(key);
-          draft.settings.hiddenCards = [...list];
-          return draft;
+    // v21: group by dashboard section so ▲▼ moves visibly within the same tab
+    DASH_SECTIONS.filter(([id]) => id !== 'all').forEach(([secId, secTitle]) => {
+      const inSec = order.filter(k => sectionOf(k) === secId);
+      if (!inSec.length) return;
+      orderList.appendChild(el('div', { class: 'order-list__group', text: secTitle }));
+      inSec.forEach((key, pos) => {
+        const isHidden = hidden.has(key);
+        const eye = el('button', { class: 'icon-btn order-list__eye', 'aria-pressed': String(!isHidden), 'aria-label': isHidden ? 'ჩვენება' : 'დამალვა', title: isHidden ? 'ჩვენება მთავარ ეკრანზე' : 'დამალვა', text: isHidden ? '🚫' : '👁' });
+        eye.addEventListener('click', () => {
+          updateState(draft => {
+            const list = new Set(draft.settings.hiddenCards || []);
+            if (list.has(key)) list.delete(key); else list.add(key);
+            draft.settings.hiddenCards = [...list];
+            return draft;
+          });
+          drawOrder();
         });
-        drawOrder();
+        const up = el('button', { class: 'icon-btn', 'aria-label': 'ზემოთ', text: '▲' });
+        if (pos === 0) up.disabled = true;
+        up.addEventListener('click', () => swapKeys(key, inSec[pos - 1]));
+        const down = el('button', { class: 'icon-btn', 'aria-label': 'ქვემოთ', text: '▼' });
+        if (pos === inSec.length - 1) down.disabled = true;
+        down.addEventListener('click', () => swapKeys(key, inSec[pos + 1]));
+        orderList.appendChild(el('div', { class: 'order-list__item' + (isHidden ? ' order-list__item--hidden' : '') }, [
+          el('span', { text: cardLabel(s, key) }),
+          el('div', { class: 'order-list__buttons' }, [eye, up, down])
+        ]));
       });
-      const up = el('button', { class: 'icon-btn', 'aria-label': 'ზემოთ', text: '▲' });
-      if (idx === 0) up.disabled = true;
-      up.addEventListener('click', () => moveCard(idx, -1));
-      const down = el('button', { class: 'icon-btn', 'aria-label': 'ქვემოთ', text: '▼' });
-      if (idx === order.length - 1) down.disabled = true;
-      down.addEventListener('click', () => moveCard(idx, 1));
-      orderList.appendChild(el('div', { class: 'order-list__item' + (isHidden ? ' order-list__item--hidden' : '') }, [
-        el('span', { text: cardLabel(s, key) }),
-        el('div', { class: 'order-list__buttons' }, [eye, up, down])
-      ]));
     });
   }
   drawOrder();
@@ -280,7 +319,7 @@ function renderAppearance() {
 
 function renderSync() {
   const card = el('div', { class: 'card' });
-  card.appendChild(el('div', { class: 'card__title', text: 'სინქრონიზაცია მოწყობილობებს შორის' }));
+  card.appendChild(el('div', { class: 'card__title', text: '🔄 სინქრონიზაცია' }));
   card.appendChild(el('p', { class: 'card__sub', text: 'კომპიუტერი და სმარტფონი ერთმანეთს GitHub-ის პირადი Gist-ით უკავშირდება — ცვლილება ერთგან ავტომატურად აისახება მეორეზეც. ყოველი ატვირთვა ღრუბელში ცალკე ვერსიად ინახება, ამიტომ ძველ ვერსიაზე დაბრუნებაც შეიძლება.' }));
 
   card.appendChild(el('details', { class: 'help-details' }, [
@@ -384,7 +423,7 @@ function renderSync() {
   ]));
   card.appendChild(el('div', { class: 'field' }, [el('label', { text: 'GitHub Personal Access Token (gist უფლებით)' }), tokenInput]));
   card.appendChild(el('details', { class: 'help-details' }, [
-    el('summary', { text: 'Gist ID (მოწინავე)' }),
+    el('summary', { text: 'Gist ID (დამატებითი)' }),
     el('div', { class: 'field', style: 'margin-top:6px' }, [gistIdInput])
   ]));
   card.appendChild(statusEl);
@@ -494,21 +533,22 @@ function renderMonths() {
 
 function renderRestore() {
   const card = el('div', { class: 'card' });
-  card.appendChild(el('div', { class: 'card__title', text: '🛟 აღდგენის წერტილები' }));
-  card.appendChild(el('p', { class: 'card__sub', text: 'აპი ავტომატურად ინახავს ასლს ყოველდღე და ყოველი სარისკო მოქმედების წინ (იმპორტი, სინქრონიზაციით ჩანაცვლება, წაშლა). აღდგენამდე მიმდინარე მდგომარეობაც შეინახება — ანუ აღდგენაც უსაფრთხოა.' }));
+  card.appendChild(el('div', { class: 'card__title', text: '🛟 სარეზერვო ასლები' }));
+  card.appendChild(el('p', { class: 'card__sub', text: 'აპი ავტომატურად ინახავს ასლს ყოველდღე და ყოველი სარისკო მოქმედების წინ (ბოლო 15 ასლი). აღდგენამდე მიმდინარე მდგომარეობაც შეინახება — ანუ აღდგენაც უსაფრთხოა.' }));
 
   const persistEl = el('div', { class: 'card__sub' });
   if (navigator.storage && navigator.storage.persisted) {
     navigator.storage.persisted().then(p => {
       persistEl.textContent = p
         ? '✓ ბრაუზერმა დაადასტურა მუდმივი შენახვა — მონაცემებს თავისით არ წაშლის.'
-        : 'ℹ️ ბრაუზერს მუდმივი შენახვა ჯერ არ დაუდასტურებია. ტელეფონზე აპი „მთავარ ეკრანზე" დაამატე — ასე მონაცემები უფრო დაცულია.';
+        : 'ℹ️ ბრაუზერს მუდმივი შენახვა ჯერ არ დაუდასტურებია. ტელეფონზე აპი „მთავარ ეკრანზე“ დაამატე — ასე მონაცემები უფრო დაცულია.';
     }).catch(() => {});
   }
   card.appendChild(persistEl);
 
   // Local snapshots
-  card.appendChild(el('h3', { class: 'subsection-title', text: 'ამ მოწყობილობაზე შენახული ასლები' }));
+  const localTitle = el('h3', { class: 'subsection-title', text: 'ამ მოწყობილობაზე შენახული ასლები' });
+  card.appendChild(localTitle);
   const localList = el('div', { class: 'restore-list' });
   card.appendChild(localList);
   const snapBtn = el('button', { class: 'btn btn--secondary btn--sm', text: '📦 ასლის შექმნა' });
@@ -517,12 +557,16 @@ function renderRestore() {
     toast(saved ? 'ასლი შეიქმნა ✓' : 'ცვლილება არ ყოფილა — ბოლო ასლი უკვე იგივეა');
     drawLocal();
   });
-  card.appendChild(el('div', { class: 'btn-row' }, [snapBtn]));
+  const pruneBtn = el('button', { type: 'button', class: 'btn btn--ghost btn--sm restore-prune-btn', text: '🧹 ძველების გასუფთავება', hidden: 'true' });
+  pruneBtn.addEventListener('click', () => openPruneSnapshotsDialog(drawLocal));
+  card.appendChild(el('div', { class: 'btn-row' }, [snapBtn, pruneBtn]));
 
   let shownLocal = 5; // v20: the list grew very long — newest 5, the rest on request
   async function drawLocal() {
     localList.innerHTML = '';
     const items = await listSnapshots();
+    localTitle.textContent = `ამ მოწყობილობაზე შენახული ასლები (${items.length})`;
+    pruneBtn.hidden = items.length <= 1;
     if (!items.length) {
       localList.appendChild(el('div', { class: 'card__sub', text: 'ჯერ ასლი არ არის.' }));
       return;
@@ -653,12 +697,46 @@ function restoreRow(title, meta, actionBtn) {
   ]);
 }
 
+/** v21: bulk delete old local restore points in one tap (keep last 3 / 5 / 1 or shared only). */
+async function openPruneSnapshotsDialog(onDone) {
+  const items = await listSnapshots();
+  if (items.length <= 1) { toast('გასასუფთავებელი ძველი ასლები არ არის'); return; }
+  const sharedCount = items.filter(x => !!x.sharedAt).length;
+  const body = el('div', {});
+  body.appendChild(el('p', { class: 'card__sub', text: `ამ მოწყობილობაზე სულ ${items.length} ასლია. აირჩიე, რამდენი უახლესი დარჩეს — გაგზავნილი ფაილები (Drive/ფოსტა) და ღრუბლის ისტორია (Gist) არ იშლება.` }));
+  const col = el('div', { class: 'btn-col' });
+  body.appendChild(col);
+  const { close } = openModal(body, { title: '🧹 ძველი ასლების გასუფთავება' });
+
+  const addOpt = (label, opts, cls, dataKey) => {
+    const b = el('button', { type: 'button', class: `btn ${cls}`, 'data-prune': dataKey, text: label });
+    b.addEventListener('click', async () => {
+      b.disabled = true;
+      try {
+        const { deleted, kept } = await pruneSnapshots(opts);
+        close();
+        toast(deleted ? `✓ წაიშალა ${deleted} ასლი (დარჩა ${kept})` : 'წასაშლელი ასლი არ მოიძებნა');
+        onDone();
+      } catch (e) {
+        toast('შეცდომა: ' + e.message, 'error');
+        b.disabled = false;
+      }
+    });
+    col.appendChild(b);
+  };
+
+  if (items.length > 3) addOpt(`ბოლო 3-ის დატოვება (წაიშლება ${items.length - 3})`, { keepLast: 3 }, 'btn--primary', 'keep3');
+  if (items.length > 5) addOpt(`ბოლო 5-ის დატოვება (წაიშლება ${items.length - 5})`, { keepLast: 5 }, 'btn--secondary', 'keep5');
+  if (sharedCount > 0) addOpt(`მხოლოდ გაგზავნილების (☁️) წაშლა (${sharedCount})`, { onlyShared: true }, 'btn--secondary', 'shared');
+  addOpt(`ბოლო 1-ის დატოვება (წაიშლება ${items.length - 1})`, { keepLast: 1 }, 'btn--danger-outline', 'keep1');
+}
+
 // ---------------- Data (export/import) ----------------
 
 function renderDataSection() {
   const state = getState();
   const card = el('div', { class: 'card' });
-  card.appendChild(el('div', { class: 'card__title', text: 'მონაცემები' }));
+  card.appendChild(el('div', { class: 'card__title', text: '💾 ექსპორტი და იმპორტი' }));
 
   const lastBackupText = state.settings.lastBackupAt
     ? `ბოლო ბექაფი: ${new Date(state.settings.lastBackupAt).toLocaleString('ka-GE', { hour12: false })}`
@@ -737,13 +815,13 @@ function renderDataSection() {
 
 function renderDangerZone() {
   const zone = el('div', { class: 'danger-zone' });
-  zone.appendChild(el('h3', { text: 'საშიში ზონა' }));
-  zone.appendChild(el('p', { class: 'card__sub', text: 'ყველა მონაცემის წაშლა ამ მოწყობილობაზე. წაშლამდე აპი ავტომატურად შექმნის აღდგენის წერტილს, მაგრამ სჯობს JSON ექსპორტიც გააკეთო. ღრუბელში (თუ სინქრონიზაცია ჩართულია) მონაცემები ავტომატურად არ წაიშლება — აპი ჯერ გკითხავს.' }));
+  zone.appendChild(el('h3', { text: '⚠️ მონაცემების გასუფთავება' }));
+  zone.appendChild(el('p', { class: 'card__sub', text: 'ყველა მონაცემის წაშლა ამ მოწყობილობაზე. წაშლამდე აპი ავტომატურად შექმნის სარეზერვო ასლს, მაგრამ სჯობს JSON ექსპორტიც გააკეთო. ღრუბელში (თუ სინქრონიზაცია ჩართულია) მონაცემები ავტომატურად არ წაიშლება.' }));
   const wipeBtn = el('button', { class: 'btn btn--danger', text: 'ყველაფრის წაშლა' });
   wipeBtn.addEventListener('click', async () => {
-    const ok1 = await confirmDialog('ნამდვილად გსურთ ყველა მონაცემის წაშლა?', { danger: true, confirmLabel: 'დიახ' });
+    const ok1 = await confirmDialog('ნამდვილად გინდა ყველა მონაცემის წაშლა?', { danger: true, confirmLabel: 'დიახ' });
     if (!ok1) return;
-    const ok2 = await confirmDialog('ეს მოქმედება საბოლოოა და ვერ გაუქმდება. საბოლოო დადასტურება?', { danger: true, confirmLabel: 'წავშალო ყველაფერი' });
+    const ok2 = await confirmDialog('ეს მოქმედება საბოლოოა. საბოლოო დადასტურება?', { danger: true, confirmLabel: 'წავშალო ყველაფერი' });
     if (!ok2) return;
     await snapshotCurrent('before-wipe');
     wipeState();

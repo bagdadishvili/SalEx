@@ -78,7 +78,7 @@ export function openModal(bodyEl, { title = '', onClose } = {}) {
     const h = document.createElement('h2');
     h.className = 'modal__title';
     const r = textResolver ? textResolver(title) : null;
-    h.textContent = r ? r.text : title;
+    h.textContent = keepLastWords(r ? r.text : title);
     if (r && r.renameable) h.setAttribute('data-rtext', r.key || title);
     modal.appendChild(h);
   }
@@ -155,18 +155,62 @@ export function rt(s) {
 }
 
 /**
- * Keeps the last two words of a sentence together (no-break space), so a hint never ends with
- * one lonely word wrapped below (also in browsers without CSS text-wrap: pretty). Short texts
- * (buttons, titles) are balanced by CSS instead. Only short last words — nothing can overflow.
+ * Keeps short parenthetical phrases together (so "(საერთო ხარჯი 50/50)" never splits half on top
+ * and half below) and keeps the last two words of a sentence together (no lonely wrapped word).
+ * Caps length so nothing can ever overflow a narrow phone screen.
  */
 export function keepLastWords(s) {
-  if (typeof s !== 'string' || s.length < 40 || s.includes('\n')) return s;
-  const i = s.lastIndexOf(' ');
-  if (i <= 0) return s;
-  const last = s.slice(i + 1);
-  const prev = s.slice(s.lastIndexOf(' ', i - 1) + 1, i);
-  if (!last || last.length > 10 || prev.length + last.length > 22 || s.split(' ').length < 4) return s;
-  return s.slice(0, i) + ' ' + last;
+  if (typeof s !== 'string' || !s || s.includes('\n')) return s;
+  // 1) Short/medium parenthetical chunks stay intact as one unit (spaces -> NBSP; slashes/hyphens -> word-joiner).
+  let out = s.replace(/\([^()\n]{2,26}\)/g, m => m.replace(/ /g, '\u00A0').replace(/([/-])/g, '\u2060$1\u2060'));
+  // 2) Keep the last two words of longer sentences together (Georgian words can be up to ~14 chars).
+  if (out.length < 28) return out;
+  const i = out.lastIndexOf(' ');
+  if (i <= 0) return out;
+  const last = out.slice(i + 1);
+  const prev = out.slice(out.lastIndexOf(' ', i - 1) + 1, i);
+  if (!last || last.length > 14 || prev.length + last.length > 26 || out.split(' ').length < 4) return out;
+  return out.slice(0, i) + '\u00A0' + last;
+}
+
+/**
+ * Compact "ⓘ" help toggle: keeps screens clean while keeping explanations 1 tap away.
+ * Returns { btn, box } — place btn next to a title and box inside the card/section.
+ */
+export function infoTip(text) {
+  const box = el('div', { class: 'info-tip__box', hidden: 'true', text });
+  const btn = el('button', {
+    type: 'button',
+    class: 'info-tip__btn',
+    'aria-expanded': 'false',
+    'aria-label': 'განმარტება',
+    title: 'განმარტება',
+    text: 'ⓘ'
+  });
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = box.hidden;
+    box.hidden = !open;
+    btn.setAttribute('aria-expanded', String(open));
+  });
+  return { btn, box };
+}
+
+/** Renders text with short parentheticals wrapped in <span class="nowrap"> so "/" or "-" never splits them. */
+function appendSmartText(node, text) {
+  if (typeof text !== 'string' || !text.includes('(')) { node.textContent = text; return; }
+  const re = /\([^()\n]{2,26}\)/g;
+  let last = 0, m;
+  while ((m = re.exec(text))) {
+    if (m.index > last) node.appendChild(document.createTextNode(text.slice(last, m.index)));
+    const sp = document.createElement('span');
+    sp.className = 'nowrap';
+    sp.textContent = m[0];
+    node.appendChild(sp);
+    last = m.index + m[0].length;
+  }
+  if (last === 0) { node.textContent = text; return; }
+  if (last < text.length) node.appendChild(document.createTextNode(text.slice(last)));
 }
 
 export function el(tag, attrs = {}, children = []) {
@@ -176,7 +220,11 @@ export function el(tag, attrs = {}, children = []) {
     else if (k === 'text') {
       const r = textResolver && !('data-tkey' in attrs) && typeof v === 'string' ? textResolver(v) : null;
       const shown = r ? r.text : v;
-      node.textContent = tag === 'option' || tag === 'textarea' ? shown : keepLastWords(shown);
+      if (tag === 'option' || tag === 'textarea') {
+        node.textContent = shown;
+      } else {
+        appendSmartText(node, keepLastWords(shown));
+      }
       if (r && r.renameable) node.setAttribute('data-rtext', r.key || v);
     }
     else if ((k === 'placeholder' || k === 'title') && typeof v === 'string') node.setAttribute(k, rt(v));

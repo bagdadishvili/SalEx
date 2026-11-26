@@ -2,7 +2,7 @@
 // the compact stat card, the green "done" look, and "tap a card → its entries open below".
 
 import { formatMoney, parseAmountInput, isEnvelope, envelopeUsed, txnAmountEur, txnPlannedEur, isTwoStep } from '../../calc.js';
-import { el, formatDate } from '../../ui.js';
+import { el, formatDate, infoTip } from '../../ui.js';
 import { tx, personTag } from '../../texts.js';
 import { payButton, openTransactionForm } from '../transactions.js';
 import { navigate } from '../../app.js';
@@ -45,12 +45,21 @@ export function statCard({ label, labelKey, value, sub, pct, color, accentBorder
   return card;
 }
 
+/** Card header with pure label (for data-tkey / text edit) + optional compact "ⓘ" hint toggle. */
+export function cardHead(labelAttrs, tipText = null, hasValue = false) {
+  const label = el('div', { class: 'stat-card__label', ...labelAttrs });
+  if (!tipText) return { head: label, box: null };
+  const tip = infoTip(tipText);
+  const head = el('div', { class: 'stat-card__head' + (hasValue ? ' stat-card__head--split' : '') }, [label, tip.btn]);
+  return { head, box: tip.box };
+}
+
 /** Paid-in-full look: green frame + "✓ …" line, so a done card is seen at a glance. */
 export function markDone(card, text) {
   card.classList.add('card--done');
   card.style.borderLeft = '';
   // below the title + amount line, so the two stay on one line
-  const anchor = card.querySelector(':scope > .stat-card__value') || card.querySelector(':scope > .stat-card__label');
+  const anchor = card.querySelector(':scope > .stat-card__value') || card.querySelector(':scope > .stat-card__head') || card.querySelector(':scope > .stat-card__label');
   card.insertBefore(el('div', { class: 'done-badge', text: `✓ ${text}` }), anchor ? anchor.nextSibling : card.firstChild);
   return card;
 }

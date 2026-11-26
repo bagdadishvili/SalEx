@@ -5,7 +5,7 @@ import { computeMonthOverview, formatMoney } from '../../calc.js';
 import { el, savedToast, toast, formatDate } from '../../ui.js';
 import { tx, personName } from '../../texts.js';
 import { fetchEurGelRate, fetchFreshRateNow, getRatesToken } from '../../rates.js';
-import { inlineNumberField, progressBar } from './shared.js';
+import { inlineNumberField, progressBar, cardHead } from './shared.js';
 
 const AUTO_RATE_EVERY_MS = 30 * 60 * 1000;
 let lastAutoRateTry = 0;
@@ -45,22 +45,27 @@ export async function autoRefreshRate(key, rerender) {
 export function summaryCard({ month, categories, settings }) {
   const o = computeMonthOverview(month, categories, settings);
   const card = el('div', { class: 'card stat-card stat-card--wide summary-card' });
-  card.appendChild(el('div', { class: 'stat-card__label', ...tx('card.summary') }));
+  const { head, box } = cardHead(tx('card.summary'), 'ხარჯები = გადასახადები + ყოველდღიური ბიუჯეტი (საერთო ხარჯი იყოფა 50/50). დანაზოგი ხარჯში არ ითვლება.');
+  card.append(head, box);
 
   const progressLine = (labelKey, done, planned, doneWord) => {
     const pct = planned > 0 ? Math.min(100, (done / planned) * 100) : 0;
+    const pctText = planned > 0 ? `${Math.round((done / planned) * 100)}%` : '0%';
     return el('div', { class: 'summary-line' }, [
       el('div', { class: 'summary-line__top' }, [
-        el('span', { class: 'stat-card__sub', ...tx(labelKey) }),
-        el('span', { class: 'summary-line__value tabular-nums', text: `${formatMoney(done, 'EUR', 0)} / ${formatMoney(planned, 'EUR', 0)}` })
+        el('span', { class: 'summary-line__label', ...tx(labelKey) }),
+        el('span', { class: 'summary-line__right tabular-nums' }, [
+          el('span', { class: 'summary-line__value', text: `${formatMoney(done, 'EUR', 0)} / ${formatMoney(planned, 'EUR', 0)}` }),
+          el('span', { class: 'summary-line__pct', text: pctText })
+        ])
       ]),
       progressBar(pct, done > planned + 0.5 ? 'var(--danger)' : undefined),
-      el('div', { class: 'stat-card__sub tabular-nums', text: `${doneWord} ${formatMoney(done, 'EUR')} · დარჩა ${formatMoney(Math.max(0, planned - done), 'EUR')}` })
+      el('div', { class: 'stat-card__sub tabular-nums', text: `${doneWord}: ${formatMoney(done, 'EUR')} · დარჩა: ${formatMoney(Math.max(0, planned - done), 'EUR')}` })
     ]);
   };
   card.appendChild(progressLine('summary.bills', o.bills.paid, o.bills.planned, 'გადახდილი'));
   if (o.budgets.planned > 0.004) card.appendChild(progressLine('summary.budgets', o.budgets.used, o.budgets.planned, 'დახარჯული'));
-  if (o.fromSavings > 0.004) card.appendChild(el('div', { class: 'stat-card__sub tabular-nums', text: `💸 დანაზოგიდან დახარჯული: ${formatMoney(o.fromSavings, 'EUR')} (ხელფასის გეგმაში არ ითვლება)` }));
+  if (o.fromSavings > 0.004) card.appendChild(el('div', { class: 'stat-card__sub tabular-nums', text: `💸 დანაზოგიდან დახარჯული: ${formatMoney(o.fromSavings, 'EUR')} (ხელფასის გეგმაში არ შედის)` }));
 
   const m0 = (v) => formatMoney(v, 'EUR', 0);
   const table = el('table', { class: 'split-table summary-table tabular-nums' });
@@ -78,7 +83,6 @@ export function summaryCard({ month, categories, settings }) {
     row('summary.free', 'free', 'summary-table__free')
   ]));
   card.appendChild(table);
-  card.appendChild(el('div', { class: 'stat-card__sub', text: 'ხარჯები = გადასახადები + კვება/საწვავი (საერთო ხარჯი 50/50). დანაზოგი ხარჯში არ ითვლება.' }));
   return card;
 }
 

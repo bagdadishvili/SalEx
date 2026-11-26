@@ -6,7 +6,7 @@ import { categoryTrend, fxImpact, whatIf, shiftKey } from '../../insights.js';
 import { el } from '../../ui.js';
 import { tx, personTag } from '../../texts.js';
 import { MONTH_NAMES_SHORT, getUiPref, setUiPref } from '../../monthNav.js';
-import { expanded } from './shared.js';
+import { expanded, cardHead } from './shared.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
 function svgEl(tag, attrs) {
@@ -67,7 +67,7 @@ export function fxCard(ctx) {
   card.appendChild(el('div', { class: 'stat-card__label', ...tx('card.fx') }));
   const good = r.gain >= 0;
   card.appendChild(el('div', { class: 'stat-card__value tabular-nums ' + (good ? 'text-success' : 'text-danger'), text: `${good ? '+' : '−'}${m0(Math.abs(r.gain))}` }));
-  card.appendChild(el('div', { class: 'stat-card__sub tabular-nums', text: `12 თვეში ლარით გადახდილი ${formatMoney(r.gel, 'GEL', 0)} = ${m0(r.eurPaid)}. საშუალო კურსი ${r.avgRate.toFixed(3).replace('.', ',')} — ${good ? 'კურსმა დაგიზოგათ' : 'კურსმა დაგიჯდათ'} ${m0(Math.abs(r.gain))} თვის გეგმის კურსთან შედარებით.` }));
+  card.appendChild(el('div', { class: 'stat-card__sub tabular-nums', text: `12 თვეში ლარით გადახდილია ${formatMoney(r.gel, 'GEL', 0)} = ${m0(r.eurPaid)}. საშუალო კურსი ${r.avgRate.toFixed(3).replace('.', ',')} — ${good ? 'კურსით დაიზოგა' : 'კურსის სხვაობით მეტი დაჯდა'} ${m0(Math.abs(r.gain))} (გეგმის კურსთან შედარებით).` }));
   const open = expanded.has('fx');
   if (open) {
     r.rows.slice().reverse().forEach(row => card.appendChild(el('div', { class: 'detail-row' }, [
@@ -90,7 +90,8 @@ export function whatIfCard(ctx) {
   const { month, categories, settings } = ctx;
   if ((month.income?.giorgi || 0) + (month.income?.nino || 0) <= 0) return [];
   const card = el('div', { class: 'card stat-card stat-card--wide whatif-card' });
-  card.appendChild(el('div', { class: 'stat-card__label', ...tx('card.whatif') }));
+  const { head, box } = cardHead(tx('card.whatif'), 'ეს მხოლოდ წინასწარი გამოთვლაა — რეალური მონაცემები არ იცვლება. ფრჩხილებში ჩანს სხვაობა ახლანდელთან.');
+  card.append(head, box);
   const num = (k, label) => {
     const i = el('input', { type: 'text', inputmode: 'decimal', value: wi[k], placeholder: '0', 'aria-label': label });
     i.addEventListener('input', () => { wi[k] = i.value; draw(); });
@@ -124,6 +125,5 @@ export function whatIfCard(ctx) {
     out.appendChild(table);
   }
   draw();
-  card.appendChild(el('div', { class: 'stat-card__sub', text: 'მხოლოდ გამოთვლაა — მონაცემები არ იცვლება. ფრჩხილებში — სხვაობა ახლანდელთან.' }));
   return card;
 }

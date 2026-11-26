@@ -141,12 +141,12 @@ export function renderDashboard(root) {
       if (b) cardsWrap.appendChild(categoryCard(b, ctx));
     });
     if (!cardsWrap.querySelector('.card:not(.prepare-card)')) {
-      cardsWrap.appendChild(el('div', { class: 'empty-state', text: 'ამ ნაწილში ბარათი არ არის (დამალულია ან ფუნქცია გამორთულია) — პარამეტრები → 🧩 ფუნქციები / დეშბორდის ბლოკები.' }));
+      cardsWrap.appendChild(el('div', { class: 'empty-state', text: 'ამ ნაწილში ბარათები დამალულია ან ფუნქცია გამორთულია — შეცვლა: პარამეტრები → 🧩 ფუნქციები / გარეგნობა.' }));
     }
   }
 
   const customize = el('div', { class: 'dash-customize' }, [
-    el('button', { class: 'btn btn--ghost btn--sm', type: 'button', text: '⚙️ ბლოკების დამალვა / გადაადგილება' })
+    el('button', { class: 'btn btn--ghost btn--sm', type: 'button', text: '⚙️ ბარათების დამალვა / დალაგება' })
   ]);
   customize.firstChild.addEventListener('click', () => { navigate('settings'); setTimeout(() => revealInSettings('dashboard-layout'), 50); });
   container.appendChild(customize);
@@ -178,7 +178,7 @@ function prepareCards(state, key, open, redraw) {
     const closeBtn = el('button', { class: 'icon-btn icon-btn--sm prepare-card__close', type: 'button', 'aria-label': 'შეხსენების დამალვა ამ თვისთვის', title: 'დამალვა (ამ თვისთვის). სულ გამორთვა — პარამეტრებში', text: '✕' });
     closeBtn.addEventListener('click', () => {
       setUiPref('dismissedPrepare', [...dismissed, k].slice(-24));
-      toast('დაიმალა. „📅 შემდეგი თვის მომზადება" ისევ ხელმისაწვდომია „შაბლონების" გვერდზე; სულ გამორთვა — პარამეტრებში.');
+      toast('დაიმალა. „📅 თვის მომზადება“ ყოველთვის ხელმისაწვდომია შაბლონების გვერდზე; სულ გამორთვა — პარამეტრებში.');
       redraw();
     });
     return el('div', { class: 'card stat-card stat-card--wide prepare-card' + (primary ? ' prepare-card--main' : '') }, [

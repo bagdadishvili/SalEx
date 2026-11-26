@@ -7,7 +7,8 @@ import { paydaySteps, calendarItems, bankCheck } from '../../insights.js';
 import { el, toast, undoToast, formatDate } from '../../ui.js';
 import { tx, personTag } from '../../texts.js';
 import { getUiPref } from '../../monthNav.js';
-import { expanded, markDone, inlineNumberField } from './shared.js';
+import { expanded, markDone, inlineNumberField, cardHead } from './shared.js';
+import { payButton, openTransactionForm } from '../transactions.js';
 
 const STEP_LABEL = {
   toShared: '➡️ საერთო ანგარიშზე',
@@ -23,26 +24,26 @@ export function paydayCard(ctx) {
   const people = paydaySteps(month, categories, settings, keep).filter(p => p.steps.length);
   if (!people.length) return [];
   const card = el('div', { class: 'card stat-card stat-card--wide payday-card card--expandable' });
-  card.appendChild(el('div', { class: 'stat-card__label', ...tx('card.payday') }));
+  const { head, box } = cardHead(tx('card.payday'), 'თანხები აღებულია „💸 ხელფასის განაწილება“ ბარათიდან. ბოლო ✓ ამ ადამიანის ყველა პირადი ანგარიშის გადასახადს გადატანილად მონიშნავს.');
+  card.append(head, box);
   const allDone = people.every(p => p.allDone);
   const open = !allDone || expanded.has('payday');
   if (allDone) markDone(card, 'ყველა გადარიცხვა შესრულებულია');
   if (open) {
     people.forEach(p => {
-      const box = el('div', { class: 'payday-person' }, [el('div', { class: 'payday-person__name', text: personTag(p.person) })]);
+      const boxP = el('div', { class: 'payday-person' }, [el('div', { class: 'payday-person__name', text: personTag(p.person) })]);
       p.steps.forEach(s => {
         const cb = el('input', { type: 'checkbox' });
         cb.checked = s.done;
         cb.disabled = !!s.auto;
         cb.addEventListener('change', () => tickStep(key, month, categories, p.person, s, cb.checked, rerender));
         const label = s.id === 'debits' && s.open ? `${STEP_LABEL.debits} · ${s.open} გადასახადი` : STEP_LABEL[s.id];
-        box.appendChild(el('label', { class: 'payday-step' + (s.done ? ' payday-step--done' : '') }, [
+        boxP.appendChild(el('label', { class: 'payday-step' + (s.done ? ' payday-step--done' : '') }, [
           cb, el('span', { class: 'payday-step__name', text: label }), el('span', { class: 'payday-step__amount tabular-nums', text: formatMoney(s.amount, 'EUR', 0) })
         ]));
       });
-      card.appendChild(box);
+      card.appendChild(boxP);
     });
-    card.appendChild(el('div', { class: 'stat-card__sub', text: 'თანხები — „💸 ვინ რამდენი გადარიცხოს" ბარათიდან. ბოლო ✓ ამ ადამიანის ყველა პირადი ანგარიშის გადასახადს „⇄ გადატანილად" მონიშნავს.' }));
   }
   if (allDone) {
     const btn = el('button', { type: 'button', class: 'card-expand', 'aria-expanded': String(open), text: open ? '▲ დაკეცვა' : '▼ ნახვა' });
@@ -101,14 +102,21 @@ export function calendarCard(ctx) {
   const dayLabel = (d) => (d < 0 ? 'ვადაგასული' : d === 0 ? 'დღეს' : d === 1 ? 'ხვალ' : `${d} დღეში`);
   (open ? items : items.slice(0, 4)).forEach(x => {
     const status = x.t.transferredAt ? '⇄ გადატანილია' : x.warn ? '⚠️ ჯერ არ არის გადატანილი' : '';
-    list.appendChild(el('div', { class: 'cal-row' + (x.overdue || x.warn ? ' cal-row--warn' : '') }, [
+    const rowEl = el('div', { class: 'cal-row cal-row--interactive' + (x.overdue || x.warn ? ' cal-row--warn' : '') }, [
       el('div', { class: 'cal-row__date tabular-nums' }, [el('strong', { text: formatDate(x.t.dueDate).slice(0, 5) }), el('span', { text: dayLabel(x.daysTo) })]),
       el('div', { class: 'cal-row__main' }, [
         el('div', { class: 'cal-row__name', text: x.t.name }),
         el('div', { class: 'detail-row__meta', text: [personTag(x.t.account || 'shared'), status].filter(Boolean).join(' · ') })
       ]),
-      el('div', { class: 'cal-row__amount tabular-nums', text: formatMoney(x.t.amountPlanned, x.t.currency, 0) })
-    ]));
+      el('div', { class: 'cal-row__amount tabular-nums', text: formatMoney(x.t.amountPlanned, x.t.currency, 0) }),
+      el('div', { class: 'cal-row__acts' }, [payButton(x.t, month, rerender)])
+    ]);
+    rowEl.addEventListener('click', (e) => {
+      if (document.body.classList.contains('text-edit-mode')) return;
+      if (e.target.closest('button, input, select, a, label')) return;
+      openTransactionForm(x.t, key, rerender);
+    });
+    list.appendChild(rowEl);
   });
   card.appendChild(list);
   if (items.length > 4) {
@@ -125,7 +133,8 @@ export function bankCard(ctx) {
   const rows = bankCheck(month, categories).filter(r => r.toGo > 0.5 || r.balance !== null);
   if (!rows.length) return [];
   const card = el('div', { class: 'card stat-card stat-card--wide bank-card' });
-  card.appendChild(el('div', { class: 'stat-card__label', ...tx('card.bank') }));
+  const { head, box } = cardHead(tx('card.bank'), 'ჩაწერე ბანკის აპში ნანახი ნაშთი. „გადის“ = ამ თვის ჯერ გადაუხდელი გადასახადები, ბიუჯეტების ნაშთი და გადასარიცხი დანაზოგი. თუ „დარჩება“ მოულოდნელად ცოტაა — რაღაც გადახდა ჯერ არ ჩაწერილა.');
+  card.append(head, box);
   rows.forEach(r => {
     const input = inlineNumberField(r.balance ?? 0, (v) => {
       updateState(d => {
@@ -149,6 +158,5 @@ export function bankCard(ctx) {
       el('div', { class: 'bank-row__result tabular-nums' + (r.after !== null && r.after < -0.5 ? ' text-danger' : ''), text: result })
     ]));
   });
-  card.appendChild(el('div', { class: 'stat-card__sub', text: 'ჩაწერე ბანკის აპში ნანახი ნაშთი. „გადის" = ამ თვის ჯერ გადაუხდელი გადასახადები, ბიუჯეტების ნაშთი და გადასარიცხი დანაზოგი ამ ანგარიშიდან. თუ „დარჩება" მოულოდნელად ცოტაა — რაღაც გადახდა არ არის ჩაწერილი.' }));
   return card;
 }

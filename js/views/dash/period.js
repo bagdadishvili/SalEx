@@ -5,6 +5,7 @@ import { computeRangeOverview, formatMoney } from '../../calc.js';
 import { el } from '../../ui.js';
 import { tx } from '../../texts.js';
 import { MONTH_NAMES_SHORT, getUiPref, setUiPref } from '../../monthNav.js';
+import { cardHead } from './shared.js';
 
 function shiftKey(key, delta) {
   const [y, m] = key.split('-').map(Number);
@@ -22,8 +23,9 @@ export function yearCard({ state, key, goToMonth, rerender }) {
   const from = lastN ? shiftKey(cur, 1 - lastN) : (saved && saved.from ? saved.from : `${year}-01`);
   const to = lastN ? cur : (saved && saved.to ? saved.to : `${year}-12`);
   const yo = computeRangeOverview(state.months, state.categories, from, to);
-  const card = el('div', { class: 'card', style: 'grid-column: 1 / -1' });
-  card.appendChild(el('div', { class: 'card__title', ...tx('card.year') }));
+  const card = el('div', { class: 'card stat-card stat-card--wide year-card' });
+  const { head, box } = cardHead(tx('card.year'), 'ნაჩვენებია მხოლოდ ფაქტობრივად გადახდილი ტრანზაქციები (ცარიელი თვეები არ ჩანს). თვეზე შეხებით გადახვალ იმ თვეში.');
+  card.append(head, box);
 
   const fromIn = el('input', { type: 'month', value: from, class: 'period__input', 'aria-label': 'საიდან' });
   const toIn = el('input', { type: 'month', value: to, class: 'period__input', 'aria-label': 'სადამდე' });
@@ -55,7 +57,6 @@ export function yearCard({ state, key, goToMonth, rerender }) {
     el('div', { class: 'period__inputs' }, [fromIn, el('span', { class: 'period__dash', text: '—' }), toIn]),
     el('div', { class: 'filter-row period__quick' }, [yearBtn, lastSel, lastIn])
   ]));
-  card.appendChild(el('div', { class: 'card__sub', text: 'ფაქტი: მხოლოდ გადახდილი ტრანზაქციები (თვე, სადაც ჯერ არაფერია გადახდილი, არ ჩანს). თვეზე დაჭერით გადახვალ იმ თვეში.' }));
 
   if (!yo.rows.length) {
     card.appendChild(el('div', { class: 'empty-state', text: 'ამ პერიოდში მონაცემები არ არის' }));

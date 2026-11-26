@@ -37,13 +37,13 @@
   --accent: #2563eb;
   --accent-rgb: 37, 99, 235;
 
-  --bg: #f3f4f6;
+  --bg: #f1f5f9;
   --surface: #ffffff;
-  --surface-2: #f9fafb;
-  --border: #e5e7eb;
-  --text: #111827;
-  --text-muted: #6b7280;
-  --text-faint: #9ca3af;
+  --surface-2: #f8fafc;
+  --border: #e2e8f0;
+  --text: #0f172a;
+  --text-muted: #475569;
+  --text-faint: #94a3b8;
   --danger: #dc2626;
   --danger-bg: #fee2e2;
   --success: #16a34a;
@@ -51,10 +51,10 @@
   --warning: #d97706;
   --warning-bg: #fef3c7;
 
-  --radius: 12px;
-  --radius-sm: 8px;
-  --shadow: 0 1px 2px rgba(0,0,0,0.04), 0 2px 8px rgba(0,0,0,0.06);
-  --shadow-modal: 0 8px 40px rgba(0,0,0,0.25);
+  --radius: 16px;
+  --radius-sm: 10px;
+  --shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 3px 10px rgba(15, 23, 42, 0.045);
+  --shadow-modal: 0 10px 40px rgba(15, 23, 42, 0.28);
 
   --font-scale: 1;
   --space-1: 4px;
@@ -68,20 +68,20 @@
 }
 
 [data-theme="dark"] {
-  --bg: #0f1115;
-  --surface: #1a1d24;
-  --surface-2: #22262f;
-  --border: #2e3340;
-  --text: #f3f4f6;
-  --text-muted: #9ca3af;
-  --text-faint: #6b7280;
+  --bg: #0b0f17;
+  --surface: #141923;
+  --surface-2: #1c2331;
+  --border: #283244;
+  --text: #f1f5f9;
+  --text-muted: #94a3b8;
+  --text-faint: #64748b;
   --danger: #f87171;
-  --danger-bg: #3f1d1d;
+  --danger-bg: #3b1719;
   --success: #4ade80;
-  --success-bg: #123a22;
+  --success-bg: #113420;
   --warning: #fbbf24;
-  --warning-bg: #3a2d0f;
-  --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 2px 12px rgba(0,0,0,0.4);
+  --warning-bg: #382b0f;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.35), 0 4px 14px rgba(0, 0, 0, 0.32);
 }
 
 [data-font-scale="small"] { --font-scale: 0.9; }
@@ -1319,3 +1319,379 @@ button, .btn, .pay-btn, .filter-btn, .icon-btn, .segmented__btn, .tab-bar__item 
 /* income card: this month's salary date */
 .salary-date-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-top: 4px; }
 .salary-date { min-height: 34px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); padding: 2px 6px; font: inherit; font-size: 0.85rem; }
+
+/* ---------- v21: refined visual hierarchy, balanced proportions, modern controls ---------- */
+
+/* Compact crisp sticky header */
+.app-header {
+  padding: 12px var(--space-4);
+  background: var(--surface);
+  box-shadow: 0 1px 0 var(--border);
+  border-bottom: none;
+}
+.app-header__title {
+  font-size: 1.15rem;
+  letter-spacing: -0.015em;
+}
+
+/* Unified card geometry & typography hierarchy (card title clearly stronger than secondary buttons) */
+.card, .stat-card {
+  padding: 14px 16px;
+  border-radius: var(--radius);
+}
+.stat-card {
+  row-gap: 6px;
+  column-gap: 10px;
+}
+.stat-card__label, .card__title {
+  font-size: 0.94rem;
+  font-weight: 700;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+}
+.card__title { margin: 0 0 8px; }
+.stat-card__value {
+  font-size: 1.28rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+.stat-card__sub, .card__sub {
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+.card-grid { gap: 12px; }
+
+/* Header row with optional "ⓘ" tip button */
+.stat-card__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  grid-column: 1 / -1;
+}
+.stat-card__head--split { grid-column: 1; justify-self: start; }
+.stat-card__head .stat-card__label { margin: 0; min-width: 0; }
+
+/* Extras quick-add form: aligned 2-row grid so "+ დამატება" never breaks onto two lines */
+.extras__form {
+  grid-template-columns: minmax(0, 1fr) minmax(112px, auto);
+  align-items: stretch;
+}
+.extras__form .btn {
+  white-space: nowrap;
+  padding: 6px 12px;
+  min-height: 40px;
+}
+.extras__form input, .extras__form select { min-height: 40px; }
+
+/* Compact "ⓘ" help button + soft expandable note box */
+.info-tip__btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+  position: relative;
+}
+.info-tip__btn::after { content: ''; position: absolute; inset: -8px; } /* 40px touch target */
+.info-tip__btn:hover, .info-tip__btn[aria-expanded="true"] {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.1);
+}
+.info-tip__box {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.45;
+  margin: 2px 0;
+}
+.info-tip__box[hidden] { display: none !important; }
+
+/* Modern pill segmented controls (dashboard sections, split tabs, plan scope, envelope mode) */
+.segmented {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 3px;
+  gap: 3px;
+  overflow: visible;
+}
+.segmented__btn {
+  min-height: 36px;
+  padding: 6px 8px;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.segmented__btn[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--accent);
+  font-weight: 700;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12), 0 0 0 1px rgba(var(--accent-rgb), 0.15);
+}
+[data-theme="dark"] .segmented__btn[aria-pressed="true"] {
+  background: rgba(var(--accent-rgb), 0.24);
+  color: #fff;
+  box-shadow: none;
+}
+.dash-sections .segmented__btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 4px;
+  font-size: clamp(0.74rem, 3.1vw, 0.84rem);
+}
+.split-tabs .segmented__btn {
+  font-size: 0.82rem;
+  padding: 6px 8px;
+}
+
+/* Balanced buttons & 2-column symmetric toolbars */
+.btn {
+  min-height: 42px;
+  padding: 8px 14px;
+  font-size: 0.88rem;
+  border-radius: var(--radius-sm);
+  line-height: 1.25;
+}
+.btn--sm {
+  min-height: 36px;
+  padding: 6px 12px;
+  font-size: 0.82rem;
+}
+.btn--danger-outline {
+  background: transparent;
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.btn--danger-outline:hover { background: var(--danger-bg); }
+.btn-row--split {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: var(--space-2) 0 var(--space-3);
+}
+.btn-row--split .btn {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 8px;
+  font-size: 0.84rem;
+  white-space: normal;
+  text-align: center;
+}
+@media (max-width: 340px) {
+  .btn-row--split { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Full-width subtle card footer expand button (clean 40px touch bar) */
+.card-expand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 38px;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  font-size: 0.83rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+.card-expand:hover { background: rgba(var(--accent-rgb), 0.05); border-radius: 0 0 8px 8px; }
+
+/* Month overview: clear labels + mini percentage pill */
+.summary-line { padding: 6px 0; gap: 4px; }
+.summary-line__label { font-size: 0.86rem; font-weight: 600; color: var(--text); }
+.summary-line__right { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.summary-line__pct {
+  font-size: 0.74rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(var(--accent-rgb), 0.11);
+  color: var(--accent);
+}
+.summary-table thead th { font-size: 0.78rem; }
+.summary-table tbody th { font-size: 0.82rem; }
+.summary-table td { font-size: 0.88rem; }
+
+/* Daily budgets (envelopes): roomy layout + distinct ＋ / ✓ buttons */
+.envelope-row { padding: 8px 0; gap: 10px; }
+.envelope-row__top { align-items: baseline; margin-bottom: 4px; }
+.envelope-row__name { font-weight: 700; font-size: 0.92rem; }
+.envelope-row__nums { font-size: 0.85rem; font-weight: 600; white-space: nowrap; }
+.envelope-row__btns { gap: 6px; }
+.envelope-row__add, .envelope-row__done {
+  min-width: 38px;
+  min-height: 38px;
+  border-radius: 10px;
+  font-size: 1.05rem;
+  font-weight: 700;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.envelope-row__add { color: var(--accent); border-color: rgba(var(--accent-rgb), 0.3); }
+.envelope-row__done { color: var(--success); border-color: rgba(22, 163, 74, 0.35); }
+.envelope-card__actions { margin: 4px 0 0; }
+
+/* Calendar rows: interactive + responsive pay button without squeezing text */
+.calendar-card .cal-list { container-type: inline-size; }
+.cal-row--interactive {
+  cursor: pointer;
+  grid-template-columns: 4.3rem minmax(0, 1fr) auto;
+  grid-template-areas: "date main amount" "acts acts acts";
+  row-gap: 6px;
+  padding: 9px 2px;
+  border-radius: var(--radius-sm);
+}
+.cal-row--interactive:hover { background: var(--surface-2); }
+.cal-row--interactive .cal-row__date { grid-area: date; }
+.cal-row--interactive .cal-row__main { grid-area: main; min-width: 0; }
+.cal-row--interactive .cal-row__amount { grid-area: amount; align-self: start; }
+.cal-row__acts { grid-area: acts; display: flex; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+@container (min-width: 36rem) {
+  .cal-row--interactive {
+    grid-template-columns: 4.5rem minmax(0, 1fr) auto auto;
+    grid-template-areas: "date main amount acts";
+    align-items: center;
+  }
+}
+
+/* Closed month card: label + reopen button neatly on ONE row */
+.close-card--done { align-items: center; }
+.close-card--done .stat-card__label { grid-column: 1; }
+.close-card__reopen { grid-column: 2 !important; justify-self: end; white-space: nowrap; }
+
+/* Closed month badge in month selector */
+.month-nav__closed { font-size: 0.75rem; font-weight: 600; }
+.month-nav__closed[hidden] { display: none; }
+
+/* Transactions search input with inline clear button */
+.txn-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-bottom: var(--space-2);
+}
+.txn-search__input {
+  width: 100%;
+  padding-right: 40px;
+}
+.txn-search__clear {
+  position: absolute;
+  right: 4px;
+  color: var(--text-muted);
+}
+.txn-search__clear[hidden] { display: none; }
+
+/* Templates summary bar + footer */
+.tpl-summary-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin: var(--space-1) 0;
+}
+.tpl-summary-bar .tpl-summary { margin: 0; }
+.tpl-footer { justify-content: center; margin-top: var(--space-4); }
+
+/* Settings: section-grouped card order + clean 2-row restore rows on mobile */
+.order-list__group {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--accent);
+  margin: 10px 0 2px;
+  padding-left: 2px;
+}
+.order-list__group:first-child { margin-top: 2px; }
+.order-list__item { gap: 8px; padding: 8px 10px; }
+.order-list__item > span { flex: 1; min-width: 0; font-size: 0.86rem; line-height: 1.3; overflow-wrap: break-word; }
+.order-list__buttons { flex: none; gap: 2px; }
+.order-list__buttons .icon-btn { min-width: 34px; min-height: 36px; font-size: 0.95rem; padding: 0; }
+.settings-tools { margin-top: var(--space-3); }
+
+/* Horizontal filter bar: subtle right-edge fade hints at swipeable pills */
+.filter-row--scroll {
+  padding-right: 22px;
+  -webkit-mask-image: linear-gradient(to right, #000 90%, transparent 100%);
+  mask-image: linear-gradient(to right, #000 90%, transparent 100%);
+}
+
+/* Desktop 2-column grid: equal heights in pairs */
+@media (min-width: 1024px) {
+  .card-grid { align-items: stretch; }
+}
+
+.restore-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px var(--space-2);
+  padding: 10px 12px;
+}
+.restore-row__actions { display: flex; gap: 4px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+@media (max-width: 520px) {
+  .restore-row { grid-template-columns: minmax(0, 1fr); }
+  .restore-row__actions { justify-content: flex-end; border-top: 1px dashed var(--border); padding-top: 6px; }
+}
+
+/* Prepare wizard: slightly wider name column on narrow phones */
+.prep__money { max-width: none; flex-shrink: 0; }
+.prep__amount { width: 76px; }
+
+/* Bottom tab bar on phones: sleek active icon pill + crisp legible Georgian labels */
+@media (max-width: 859px) {
+  .tab-bar {
+    padding-left: 4px;
+    padding-right: 4px;
+    column-gap: 2px;
+    box-shadow: 0 -2px 10px rgba(15, 23, 42, 0.05);
+  }
+  .tab-bar__item {
+    padding: 4px 2px;
+    gap: 2px;
+  }
+  .tab-bar__icon {
+    font-size: 19px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    transition: background-color 0.15s ease;
+  }
+  .tab-bar__item[aria-current="page"] .tab-bar__icon {
+    background: rgba(var(--accent-rgb), 0.13);
+  }
+  .tab-bar__item[aria-current="page"] .tab-bar__label {
+    font-weight: 700;
+  }
+  .tab-bar__label {
+    font-size: var(--tab-label-size, 11px);
+  }
+}
+
+/* Chips: harmonious proportions in light & dark mode */
+.chip {
+  font-size: 0.76rem;
+  padding: 2px 9px;
+  line-height: 1.35;
+}
+.savings-card__actions { margin: 4px 0 2px; }
+.year-card .period { margin: 4px 0; }
+.nowrap { white-space: nowrap; }

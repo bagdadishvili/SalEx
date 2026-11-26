@@ -103,11 +103,11 @@ export function renderCategories(root) {
       const deleteBtn = el('button', { class: 'icon-btn', 'aria-label': 'წაშლა', text: '🗑' });
       deleteBtn.addEventListener('click', async () => {
         if (count > 0) {
-          toast('ჯერ გადაანაწილეთ ტრანზაქციები/შაბლონები სხვა კატეგორიაზე', 'error');
+          toast('ჯერ გადაანაწილე ტრანზაქციები/შაბლონები სხვა კატეგორიაზე', 'error');
           return;
         }
         if (state.categories.some(c => c.parentId === cat.id)) {
-          toast('ჯერ გადაანაწილეთ ამ კატეგორიაში ჩათვლილი კატეგორიები', 'error');
+          toast('ჯერ გადაანაწილე ამ კატეგორიაში ჩათვლილი კატეგორიები', 'error');
           return;
         }
         const ok = await confirmDialog(`წავშალო კატეგორია „${cat.name}"?`, { danger: true, confirmLabel: 'წაშლა' });
@@ -289,11 +289,11 @@ function openCategoryForm(existing, onSaved) {
 
   // Where does this category count on the dashboard?
   const parentSelect = el('select', {});
-  parentSelect.appendChild(el('option', { value: '', text: '📊 საკუთარი ბლოკი დეშბორდზე' }));
+  parentSelect.appendChild(el('option', { value: '', text: '📊 ცალკე ბარათი მთავარ ეკრანზე' }));
   parentSelect.appendChild(el('option', { value: FREE_BUCKET_ID, text: `🛍 ${freePseudoCategory().name}` }));
   state.categories
     .filter(c => !c.parentId && c.id !== existing?.id)
-    .forEach(c => parentSelect.appendChild(el('option', { value: c.id, text: `↳ ჩაითვალოს „${c.name}"-ის ჯამში` })));
+    .forEach(c => parentSelect.appendChild(el('option', { value: c.id, text: `↳ ჩაითვალოს „${c.name}“-ის ჯამში` })));
   parentSelect.value = existing?.parentId || '';
 
   // Target: % of income OR a fixed € amount (decimals allowed) OR 'auto'; also for sub-categories.
@@ -301,26 +301,61 @@ function openCategoryForm(existing, onSaved) {
   const key = getSelectedMonth();
   const cur = existing ? planInMonth(state, { cat: existing.id }, key) : { targetType: 'percent', percent: 0, amount: null };
   const isAmount = cur.targetType === 'amount';
-  const percentInput = el('input', { type: 'text', inputmode: 'decimal', value: fmtNum(isAmount ? cur.amount : cur.percent) });
+  const percentInput = el('input', { type: 'text', inputmode: 'decimal', value: cur.targetType === 'auto' ? '' : fmtNum(isAmount ? cur.amount : cur.percent), placeholder: '0' });
   const unitSelect = el('select', { class: 'unit-select' }, [el('option', { value: 'percent', text: '% შემოსავლიდან' }), el('option', { value: 'amount', text: '€ თვეში' }), el('option', { value: 'auto', text: 'ავტო (ამ თვის ხარჯებიდან)' })]);
   unitSelect.value = cur.targetType === 'auto' ? 'auto' : isAmount ? 'amount' : 'percent';
-  const percentField = el('div', { class: 'field' }, [el('label', { text: `მიზანი (გეგმა) — ${monthLabel(key)}-დან; წინა თვეები არ იცვლება` }), el('div', { class: 'target-row' }, [percentInput, unitSelect])]);
+  const percentField = el('div', { class: 'field' }, [
+    el('label', { text: 'მიზანი (გეგმა)' }),
+    el('div', { class: 'target-row' }, [percentInput, unitSelect]),
+    el('div', { class: 'card__sub', text: `მოქმედებს ${monthLabel(key)}-დან (წინა თვეები არ იცვლება).` })
+  ]);
 
   const goalSelect = el('select', {}, [
-    el('option', { value: 'max', text: 'მაქს. (ხარჯი — ამაზე მეტი არ)' }),
-    el('option', { value: 'min', text: 'მინ. (დანაზოგი — ამაზე ნაკლები არ)' })
+    el('option', { value: 'max', text: 'ხარჯის ლიმიტი (მაქს.)' }),
+    el('option', { value: 'min', text: 'დანაზოგის მიზანი (მინ.)' })
   ]);
   goalSelect.value = existing?.goalType || 'max';
   const goalField = el('div', { class: 'field' }, [el('label', { text: 'მიზნის ტიპი' }), goalSelect]);
+
+  // Whose is this category: both (shared 50/50) or one person's (e.g. "ინვესტიცია" = Nino's).
+  const ownerSelect = el('select', {}, ['shared', 'giorgi', 'nino'].map(v => el('option', { value: v, text: v === 'shared' ? `${PAYER_LABELS.shared} (ორივესი, 50/50)` : PAYER_LABELS[v] })));
+  ownerSelect.value = existing?.owner || 'shared';
+
+  // Savings-only fields: term (short/long) + target savings goal (v21: editable here as well as from 💰 card).
+  const termSelect = el('select', {}, [['', 'ავტომატური (სახელის მიხედვით)'], ['short', 'მოკლევადიანი'], ['long', 'გრძელვადიანი']].map(([v, l]) => el('option', { value: v, text: l })));
+  termSelect.value = existing?.term || '';
+  const termField = el('div', { class: 'field' }, [el('label', { text: 'დანაზოგის ვადა' }), termSelect]);
+
+  const goalAmtInput = el('input', { type: 'text', inputmode: 'decimal', value: existing?.goalAmount ? fmtNum(existing.goalAmount) : '', placeholder: '0' });
+  const goalByInput = el('input', { type: 'month', value: existing?.goalBy || '' });
+  const savingsGoalField = el('div', { class: 'field-row' }, [
+    el('div', { class: 'field' }, [el('label', { text: '🎯 დაგროვების მიზანი (€)' }), goalAmtInput]),
+    el('div', { class: 'field' }, [el('label', { text: 'მიზნის ვადა (თვე)' }), goalByInput])
+  ]);
+
+  const isSavingsSelected = () => {
+    if (parentSelect.value === '') return goalSelect.value === 'min';
+    if (parentSelect.value === FREE_BUCKET_ID) return false;
+    const p = state.categories.find(c => c.id === parentSelect.value);
+    return !!p && p.goalType === 'min';
+  };
 
   // Goal type belongs to the dashboard block; a target can also sit on a sub-category
   // (it then adds up in its block). Free-spending categories have no target of their own.
   function syncVisibility() {
     const own = parentSelect.value === '';
+    const sav = isSavingsSelected();
     percentField.hidden = parentSelect.value === FREE_BUCKET_ID;
     goalField.hidden = !own;
+    termField.hidden = !sav;
+    savingsGoalField.hidden = !sav;
+    percentInput.disabled = unitSelect.value === 'auto';
+    if (unitSelect.value === 'auto') percentInput.placeholder = 'ავტო';
+    else percentInput.placeholder = '0';
   }
   parentSelect.addEventListener('change', syncVisibility);
+  goalSelect.addEventListener('change', syncVisibility);
+  unitSelect.addEventListener('change', syncVisibility);
 
   let color = existing?.color || COLOR_PRESETS[state.categories.length % COLOR_PRESETS.length];
   const colorBtn = el('button', { type: 'button', class: 'color-swatch', style: `background:${color};width:36px;height:36px` });
@@ -333,22 +368,16 @@ function openCategoryForm(existing, onSaved) {
     el('div', { style: 'display:flex;align-items:center;gap:8px' }, [colorBtn])
   ]);
 
-  // Whose is this category: both (shared 50/50) or one person's (e.g. "ინვესტიცია" = Nino's).
-  const ownerSelect = el('select', {}, ['shared', 'giorgi', 'nino'].map(v => el('option', { value: v, text: v === 'shared' ? `${PAYER_LABELS.shared} (ორივესი, 50/50)` : PAYER_LABELS[v] })));
-  ownerSelect.value = existing?.owner || 'shared';
-  // savings only: short- or long-term (shown apart in the 💰 card); empty = guessed from the name
-  const termSelect = el('select', {}, [['', 'სახელიდან (მოკლე… / გრძელ…)'], ['short', 'მოკლევადიანი'], ['long', 'გრძელვადიანი']].map(([v, l]) => el('option', { value: v, text: l })));
-  termSelect.value = existing?.term || '';
-
   form.append(
     el('div', { class: 'field' }, [el('label', { text: 'სახელი' }), nameInput]),
-    el('div', { class: 'field' }, [el('label', { text: 'ვისია' }), ownerSelect]),
-    el('div', { class: 'field' }, [el('label', { text: 'დანაზოგის ვადა (მხოლოდ დანაზოგისთვის)' }), termSelect]),
-    el('div', { class: 'field' }, [el('label', { text: 'სად ჩაითვალოს' }), parentSelect]),
-    percentField,
+    el('div', { class: 'field' }, [el('label', { text: 'ვის ეკუთვნის' }), ownerSelect]),
+    el('div', { class: 'field' }, [el('label', { text: 'ჯგუფი' }), parentSelect]),
     goalField,
+    percentField,
+    termField,
+    savingsGoalField,
     colorField,
-    el('p', { class: 'card__sub', text: '📤 „საქართველოში გადასარიცხი" ახლა თითო შაბლონზე/ტრანზაქციაზე ინიშნება — ასე შეიძლება იყოს აუცილებელიც და არააუცილებელიც.' })
+    el('p', { class: 'card__sub', text: '📤 „საქართველოში გადასარიცხი“ თითო შაბლონზე ან ტრანზაქციაზე ინიშნება.' })
   );
   syncVisibility();
 
@@ -361,7 +390,7 @@ function openCategoryForm(existing, onSaved) {
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     const name = nameInput.value.trim();
-    if (!name) { toast('შეავსეთ სახელი', 'error'); return; }
+    if (!name) { toast('შეავსე სახელი', 'error'); return; }
     const parentId = parentSelect.value || null;
     const val = parentId === FREE_BUCKET_ID ? 0 : parseAmountInput(percentInput.value, 2);
     const targetType = ['amount', 'auto'].includes(unitSelect.value) ? unitSelect.value : 'percent';
@@ -369,11 +398,15 @@ function openCategoryForm(existing, onSaved) {
     const amount = targetType === 'amount' ? val : (cur.amount ?? null);
     const newCfg = { targetType, percent, amount };
     const targetChanged = isEdit && JSON.stringify({ targetType: cur.targetType, percent: cur.percent || 0, amount: cur.amount ?? null }) !== JSON.stringify(newCfg);
+    const sav = isSavingsSelected();
+    const gAmt = sav ? parseAmountInput(goalAmtInput.value, 2) : 0;
+    const gBy = sav && gAmt > 0 && /^\d{4}-\d{2}$/.test(goalByInput.value) ? goalByInput.value : '';
 
     updateState(draft => {
       if (isEdit) {
         const c = draft.categories.find(x => x.id === existing.id);
-        Object.assign(c, { name, parentId, goalType: goalSelect.value, color, georgiaTransfer: false, owner: ownerSelect.value, term: termSelect.value || null });
+        Object.assign(c, { name, parentId, goalType: goalSelect.value, color, georgiaTransfer: false, owner: ownerSelect.value, term: sav ? (termSelect.value || null) : null });
+        if (sav && gAmt > 0) { c.goalAmount = gAmt; c.goalBy = gBy; } else { delete c.goalAmount; delete c.goalBy; }
         // the target goes through the per-month plan: from the selected month on, older months untouched
         if (targetChanged) {
           if (!draft.months[key]) initMonth(draft, key);
@@ -385,7 +418,9 @@ function openCategoryForm(existing, onSaved) {
         }
       } else {
         const id = uid('cat');
-        draft.categories.push({ id, name, parentId, percent, amount, targetType, goalType: goalSelect.value, color, georgiaTransfer: false, owner: ownerSelect.value, term: termSelect.value || null });
+        const rec = { id, name, parentId, percent, amount, targetType, goalType: goalSelect.value, color, georgiaTransfer: false, owner: ownerSelect.value, term: sav ? (termSelect.value || null) : null };
+        if (sav && gAmt > 0) { rec.goalAmount = gAmt; rec.goalBy = gBy; }
+        draft.categories.push(rec);
       }
       return draft;
     });

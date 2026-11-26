@@ -2,7 +2,7 @@
 
 import { el, openModal } from './ui.js';
 import { getSelectedMonth, setSelectedMonth, shiftSelectedMonth, MONTH_NAMES_SHORT } from './monthNav.js';
-import { monthKey, budgetMonthKey, FREE_BUCKET_ID } from './state.js';
+import { getState, monthKey, budgetMonthKey, FREE_BUCKET_ID } from './state.js';
 import { resolveTopCategory } from './calc.js';
 import { personName, personTag } from './texts.js';
 
@@ -38,14 +38,18 @@ export function renderMonthNav(onChange) {
   });
   monthSelect.value = String(curM);
 
+  const closedBadge = el('span', { class: 'chip chip--closed month-nav__closed', text: '🔒 დახურულია', hidden: 'true' });
+
   function syncFromSelected() {
-    const [y, m] = getSelectedMonth().split('-').map(Number);
+    const sel = getSelectedMonth();
+    const [y, m] = sel.split('-').map(Number);
     if (![...yearSelect.options].some(o => o.value === String(y))) {
       yearSelect.appendChild(el('option', { value: String(y), text: String(y) }));
     }
     yearSelect.value = String(y);
     monthSelect.value = String(m);
-    today.hidden = getSelectedMonth() === budgetMonthKey();
+    today.hidden = sel === budgetMonthKey();
+    closedBadge.hidden = !(getState()?.months?.[sel]?.closedAt);
   }
   syncFromSelected();
 
@@ -75,7 +79,7 @@ export function renderMonthNav(onChange) {
   yearSelect.addEventListener('change', commitFromSelects);
   monthSelect.addEventListener('change', commitFromSelects);
 
-  wrap.append(prev, yearSelect, monthSelect, next, today);
+  wrap.append(prev, yearSelect, monthSelect, next, today, closedBadge);
   return wrap;
 }
 
@@ -165,7 +169,7 @@ export function categoryChips(categories, categoryId) {
 export const TEMPLATE_GROUPS = [
   ['essentials', '🏠 აუცილებელი გადასახადები'],
   ['georgia', '📤 საქართველოში გადასარიცხი'],
-  ['envelope', '🛒 ხარჯები (კვება, საწვავი — ნელ-ნელა იხარჯება)'],
+  ['envelope', '🛒 ყოველდღიური ბიუჯეტი (კვება, საწვავი…)'],
   ['other', '📦 სხვა (დანაზოგი, თავისუფალი…)']
 ];
 

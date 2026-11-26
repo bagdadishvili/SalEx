@@ -4,16 +4,21 @@ import { computeSalarySplit, formatMoney, formatPercent } from '../../calc.js';
 import { el } from '../../ui.js';
 import { tx, personName } from '../../texts.js';
 import { getUiPref, setUiPref } from '../../monthNav.js';
+import { cardHead } from './shared.js';
 
 export function splitCard({ month, categories, settings, rerender }) {
   const card = el('div', { class: 'card stat-card stat-card--wide split-card' });
-  card.appendChild(el('div', { class: 'stat-card__label', ...tx('card.split') }));
+  const view = getUiPref('splitView') === 'half' || getUiPref('splitView') === 'full' ? 'full' : 'keep';
+  const tipText = view === 'keep'
+    ? 'თითოეულის ანგარიშიდან ჩამოსაჭრელი გადასახადები იქვე რჩება, დანარჩენი ნახევარი კი საერთოზე ირიცხება — წინ და უკან გადარიცხვა აღარ სჭირდება.'
+    : 'ორივე მთელ ნახევარს რიცხავს საერთოზე; შემდეგ საერთოდან უკან ბრუნდება ის თანხა, რაც პირადი ანგარიშიდან იჭრება.';
+  const { head, box } = cardHead(tx('card.split'), tipText);
+  card.append(head, box);
   if ((month.income?.giorgi || 0) + (month.income?.nino || 0) <= 0) {
-    card.appendChild(el('div', { class: 'stat-card__sub', text: 'ჩაწერე ამ თვის ხელფასები („შემოსავალი") — აქ გამოჩნდება, ვინ სად რამდენი უნდა გადარიცხოს.' }));
+    card.appendChild(el('div', { class: 'stat-card__sub', text: 'ჩაწერე ამ თვის ხელფასები („შემოსავალი“) — აქ გამოჩნდება, ვინ სად რამდენი უნდა გადარიცხოს.' }));
     return card;
   }
   // Both variants split the month's shared costs 50/50; they differ only in the route of the money.
-  const view = getUiPref('splitView') === 'half' || getUiPref('splitView') === 'full' ? 'full' : 'keep';
   const sp = computeSalarySplit(month, categories, settings, { mode: 'equal', keepDebits: view === 'keep' });
   const m0 = (v) => formatMoney(v, 'EUR', 0);
 
@@ -48,10 +53,7 @@ export function splitCard({ month, categories, settings, rerender }) {
   const notes = [];
   const short = ['giorgi', 'nino'].filter(p => P[p].free < -0.5).map(p => `${personName(p)}: აკლია ${m0(-P[p].free)}`);
   if (short.length) notes.push(`⚠️ ხელფასი არ ჰყოფნის (${short.join(', ')}).`);
-  notes.push(view === 'keep'
-    ? 'თითოეულის ანგარიშიდან ჩამოსაჭრელი გადასახადები იქვე რჩება, დანარჩენი ნახევარი — საერთოზე. წინ და უკან გადარიცხვა არ სჭირდება.'
-    : 'ორივე მთელ ნახევარს რიცხავს საერთოზე; შემდეგ საერთოდან უკან გადადის ის თანხა, რაც პირადი ანგარიშიდან იჭრება.');
-  notes.push(`თვის საერთო ხარჯი ${m0(sp.spendPlannedTotal)} (${formatPercent(sp.spendPct, 0)} შემოსავლის) · საერთოდან გადის ${m0(sp.sharedNeeds)}.`);
+  notes.push(`თვის საერთო ხარჯი: ${m0(sp.spendPlannedTotal)} (${formatPercent(sp.spendPct, 0)} შემოსავლის) · საერთოდან გადის ${m0(sp.sharedNeeds)}.`);
   card.appendChild(el('div', { class: 'stat-card__sub split-notes', text: notes.join(' ') }));
   return card;
 }

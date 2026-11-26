@@ -55,9 +55,9 @@ function fitNavLabels() {
   if (!tabBar || (window.matchMedia && window.matchMedia('(min-width: 860px)').matches)) { tabBar && tabBar.style.removeProperty('--tab-label-size'); return; }
   const labels = [...tabBar.querySelectorAll('.tab-bar__label')];
   const overflow = () => labels.some(l => l.scrollWidth > l.clientWidth + 0.5) || tabBar.scrollWidth > tabBar.clientWidth + 0.5;
-  let size = 11;
+  let size = 11.5;
   tabBar.style.setProperty('--tab-label-size', `${size}px`);
-  while (overflow() && size > 8) {
+  while (overflow() && size > 8.5) {
     size -= 0.5;
     tabBar.style.setProperty('--tab-label-size', `${size}px`);
   }
@@ -357,7 +357,7 @@ function askNewText(key, current, def) {
 }
 
 /** Shown in Settings; bump together with CACHE_VERSION in sw.js. */
-export const APP_VERSION = '20';
+export const APP_VERSION = '21';
 
 export { applyAppearance };
 

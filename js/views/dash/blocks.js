@@ -25,7 +25,7 @@ export function dueCard(ctx) {
     else card.appendChild(el('div', { class: 'stat-card__sub', text: 'ამ თვეში გადასახადები ჯერ არ არის.' }));
     return attachDetails(card, 'due', ctx, bill);
   }
-  card.appendChild(el('div', { class: 'stat-card__sub tabular-nums', text: `${rem.next.length} გადასახადი გადასახდელია (დანაზოგი და კვება/საწვავი აქ არ ითვლება)` }));
+  card.appendChild(el('div', { class: 'stat-card__sub tabular-nums', text: `დარჩენილია ${rem.next.length} გადასახადი (დანაზოგის და ყოველდღიური ბიუჯეტის გარდა)` }));
   const acc = el('div', { class: 'due-card__accounts tabular-nums' });
   Object.entries(rem.billsByAccount).forEach(([a, v]) => {
     if (v > 0.004) acc.appendChild(el('span', { class: `chip chip--p-${a}`, text: `${personTag(a)}: ${formatMoney(v, 'EUR', 0)}` }));
@@ -36,7 +36,7 @@ export function dueCard(ctx) {
   const toMove = perPerson(rem.toTransfer);
   const waiting = perPerson(rem.awaitingDebit);
   if (toMove) card.appendChild(el('div', { class: 'stat-card__sub tabular-nums due-card__step', text: `⇄ პირად ანგარიშზე გადასატანი: ${toMove}` }));
-  if (waiting) card.appendChild(el('div', { class: 'stat-card__sub tabular-nums due-card__step', text: `⏳ გადატანილია, ბანკი ჯერ არ ჩამოჭრა: ${waiting}` }));
+  if (waiting) card.appendChild(el('div', { class: 'stat-card__sub tabular-nums due-card__step', text: `⏳ გადატანილია, ჩამოჭრის მოლოდინში: ${waiting}` }));
   const next = rem.next.slice(0, 2).map(t => `${t.name} ${formatDate(t.dueDate).slice(0, 5)}`).join(' · ');
   if (next) card.appendChild(el('div', { class: 'stat-card__sub', text: `შემდეგი: ${next}` }));
   return attachDetails(card, 'due', ctx, (tr) => bill(tr) && txnRemainingEur(tr, month.exchangeRate) > 0.004);
@@ -68,7 +68,7 @@ export function categoryCard(b, ctx) {
   if (b.goalType !== 'min') return billsCategoryCard(b, ctx, owner);
   const pct = b.planned > 0 ? Math.min(100, (b.actual / b.planned) * 100) : 0;
   const sub = `გადარიცხულია ${formatMoney(b.actual, 'EUR')} / ${formatMoney(b.planned, 'EUR')} · ${formatPercent(b.pct)} შემოსავლიდან${owner}`;
-  const card = statCard({ label: b.name, value: formatMoney(b.planned, 'EUR'), sub, pct, color: b.color });
+  const card = statCard({ label: b.name, value: formatMoney(b.planned, 'EUR'), sub, pct, color: b.color, wide: true });
   if (b.planned > 0.004) {
     if (b.toTransfer > 0.5) {
       const status = el('div', { class: 'saving-status saving-status--open' }, [
@@ -105,7 +105,7 @@ function billsCategoryCard(b, ctx, owner) {
   if (budgets > 0.004 || b.target > 0) {
     sub += ` · კვება/საწვავით სულ ${formatMoney(b.planned, 'EUR', 0)}${b.target > 0 ? ` (გეგმა ${formatMoney(b.target, 'EUR', 0)}, ${formatPercent(b.targetPercent)})` : ''}`;
   }
-  const card = statCard({ label: b.name, value: formatMoney(planned, 'EUR'), sub, pct, color: b.color });
+  const card = statCard({ label: b.name, value: formatMoney(planned, 'EUR'), sub, pct, color: b.color, wide: true });
   if (bills.length && bills.every(tr => tr.paid)) markDone(card, 'ყველა გადასახადი გადახდილია');
   return attachDetails(card, `cat:${b.id}`, ctx, inBlockBill, { categoryId: b.id });
 }

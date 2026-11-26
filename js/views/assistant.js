@@ -15,14 +15,42 @@ const MAX_ROUNDS = 6;            // model turns per message (reading data in bet
 const TRIM_AT = 160000;          // characters of conversation before old turns are folded away
 const KEEP_AFTER_TRIM = 70000;
 
-// One conversation per app session (not saved, not synced).
-const chat = newChat();
+const CHAT_STORE = 'familyBudget.aiChat.v1';
+
+// v21: conversation survives accidental reloads in the same tab (device-only sessionStorage, never synced/exported).
 function newChat() {
   return { conv: { messages: [] }, who: '', view: [], pending: [], lastCtx: '', busy: false, A: new Aliases(), usage: { input: 0, cached: 0, output: 0 } };
 }
+function loadChat() {
+  const base = newChat();
+  try {
+    if (typeof sessionStorage === 'undefined') return base;
+    const raw = sessionStorage.getItem(CHAT_STORE);
+    if (!raw) return base;
+    const saved = JSON.parse(raw);
+    if (saved && saved.conv && Array.isArray(saved.conv.messages) && Array.isArray(saved.view)) {
+      base.conv = saved.conv;
+      base.who = String(saved.who || '');
+      base.view = saved.view;
+      base.pending = Array.isArray(saved.pending) ? saved.pending : [];
+      base.lastCtx = String(saved.lastCtx || '');
+      if (saved.usage) base.usage = { input: saved.usage.input || 0, cached: saved.usage.cached || 0, output: saved.usage.output || 0 };
+    }
+  } catch { /* ignore */ }
+  return base;
+}
+function saveChat() {
+  try {
+    if (typeof sessionStorage === 'undefined') return;
+    const payload = JSON.stringify({ conv: chat.conv, who: chat.who, view: chat.view, pending: chat.pending, lastCtx: chat.lastCtx, usage: chat.usage });
+    if (payload.length < 150000) sessionStorage.setItem(CHAT_STORE, payload);
+  } catch { /* quota / private mode */ }
+}
+const chat = loadChat();
 function resetChat(note) {
   Object.assign(chat, newChat());
   if (note) chat.view.push({ who: 'sys', text: note });
+  try { if (typeof sessionStorage !== 'undefined') sessionStorage.removeItem(CHAT_STORE); } catch { /* ignore */ }
 }
 
 function addNote(title, detail) {
@@ -204,6 +232,7 @@ export function renderAssistant(root) {
     }
     // the model learns the outcome with the next message
     chat.pending = chat.pending.filter(p => !results.some(r => r.id === p.id)).concat(results);
+    saveChat();
     drawLog();
     drawChecks();
   }
@@ -261,7 +290,7 @@ export function renderAssistant(root) {
       chat.pending = owed.concat(chat.pending);
       chat.lastCtx = '';
     } finally {
-      chat.busy = false; drawLog();
+      chat.busy = false; saveChat(); drawLog();
     }
   }
 
@@ -324,7 +353,7 @@ export function renderAssistant(root) {
       plain('div', 'diag-item__fix', f.fix)
     ])));
     checksCard.appendChild(el('div', { class: 'card__title', style: 'margin-top:12px', text: `📝 პროგრამულად გასასწორებელი (${notes.length})` }));
-    checksCard.appendChild(el('p', { class: 'card__sub', text: 'AI აქ ინიშნავს, რაც აპის კოდში უნდა შეიცვალოს. „📋 კოპირება" — ტექსტი, რომელსაც დეველოპერს (Claude-ს) გადასცემ.' }));
+    checksCard.appendChild(el('p', { class: 'card__sub', text: 'AI აქ ინიშნავს, რაც აპის კოდში უნდა შეიცვალოს. „📋 კოპირება“ — ტექსტი, რომელსაც AI-ს ან დეველოპერს გადასცემ.' }));
     notes.slice().reverse().forEach(n => {
       const del = el('button', { type: 'button', class: 'icon-btn icon-btn--sm', 'aria-label': 'წაშლა', text: '✕' });
       del.addEventListener('click', () => { updateState(d => { d.settings.aiNotes = (d.settings.aiNotes || []).filter(x => x.id !== n.id); return d; }); drawChecks(); });

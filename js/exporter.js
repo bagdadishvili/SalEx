@@ -68,7 +68,7 @@ export function importJson(file) {
         replaceState(parsed, { reason: 'before-import', stamp: true, source: 'import' });
         resolve(parsed);
       } catch (e) {
-        reject(new Error('ფაილის წაკითხვა ვერ მოხერხდა — დარწმუნდით, რომ ეს სწორი JSON ბექაფია.'));
+        reject(new Error('ფაილის წაკითხვა ვერ მოხერხდა — დარწმუნდი, რომ ეს სწორი JSON ბექაფია.'));
       }
     };
     reader.onerror = () => reject(new Error('ფაილის წაკითხვის შეცდომა.'));
@@ -177,7 +177,7 @@ export function importCsv(file) {
         const col = (name) => header.indexOf(name);
         const iMonth = col('month'), iName = col('name'), iPlanned = col('amount_planned');
         if (iMonth < 0 || iName < 0 || iPlanned < 0) {
-          throw new Error('ფორმატი ვერ ამოიცნო — გამოიყენეთ ამ აპლიკაციიდან ექსპორტირებული CSV.');
+          throw new Error('ფორმატი ვერ ამოიცნო — გამოიყენე ამ აპლიკაციიდან ექსპორტირებული CSV.');
         }
         const iAccount = col('account');
         const iCat = col('category'), iGeo = col('georgia_transfer'), iOwner = col('owner'),

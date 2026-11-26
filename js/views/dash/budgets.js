@@ -9,7 +9,8 @@ import { envelopeMarkSpent, moveEnvelopeBudget } from '../../actions.js';
 import { el, openModal, toast, undoToast, formatDate } from '../../ui.js';
 import { tx, genitive, dative } from '../../texts.js';
 import { openEnvelopeDialog } from '../../envelope.js';
-import { expanded, progressBar } from './shared.js';
+import { openTransactionForm } from '../transactions.js';
+import { expanded, progressBar, cardHead } from './shared.js';
 
 export function envelopesCard({ month, key, rerender }) {
   const envs = month.transactions.filter(isEnvelope);
@@ -32,15 +33,19 @@ export function envelopesCard({ month, key, rerender }) {
     const add = el('button', { class: 'icon-btn icon-btn--sm envelope-row__add', type: 'button', 'aria-label': `${t.name}: ხარჯის ან ნაშთის ჩაწერა`, text: '＋' });
     add.addEventListener('click', () => openEnvelopeDialog(t.id, rerender));
     // "it's all spent" in one tap (amount editable) — no need to type every receipt
-    const doneBtn = !t.paid && left > 0.5 ? el('button', { class: 'icon-btn icon-btn--sm envelope-row__add', type: 'button', 'aria-label': `${t.name}: დარჩენილი დახარჯულად`, title: 'დარჩენილი — დახარჯულად', text: '✓' }) : null;
+    const doneBtn = !t.paid && left > 0.5 ? el('button', { class: 'icon-btn icon-btn--sm envelope-row__done', type: 'button', 'aria-label': `${t.name}: დარჩენილი დახარჯულად`, title: 'დარჩენილი — დახარჯულად', text: '✓' }) : null;
     if (doneBtn) doneBtn.addEventListener('click', () => openMarkSpentDialog(key, t, left, rerender));
+    const subParts = [];
+    if (perDay) subParts.push(perDay.replace(/^\s*·\s*/, ''));
+    if (extrasFromIt > 0) subParts.push(`🧺 ${formatMoney(extrasFromIt, t.currency, 0)}`);
     card.appendChild(el('div', { class: 'envelope-row' + (t.paid ? ' envelope-row--closed' : '') }, [
       el('div', { class: 'envelope-row__main' }, [
         el('div', { class: 'envelope-row__top' }, [
           el('span', { class: 'envelope-row__name', text: t.name }),
-          el('span', { class: 'tabular-nums' + (left < -0.004 ? ' text-danger' : ''), text: t.paid ? 'დახურულია' : `დარჩა ${formatMoney(left, t.currency, 0)} / ${formatMoney(t.amountPlanned, t.currency, 0)}${perDay}${extrasFromIt > 0 ? ` · 🧺 ${formatMoney(extrasFromIt, t.currency, 0)}` : ''}` })
+          el('span', { class: 'envelope-row__nums tabular-nums' + (left < -0.004 ? ' text-danger' : ''), text: t.paid ? 'დახურულია' : `დარჩა ${formatMoney(left, t.currency, 0)} / ${formatMoney(t.amountPlanned, t.currency, 0)}` })
         ]),
         progressBar(pct, left < -0.004 ? 'var(--danger)' : undefined),
+        subParts.length ? el('div', { class: 'stat-card__sub tabular-nums', text: subParts.join(' · ') }) : null,
         (t.moves || []).length ? el('div', { class: 'stat-card__sub tabular-nums', text: (t.moves || []).map(mv => {
           const other = envs.find(x => x.id === mv.other);
           return mv.amount < 0 ? `⇄ ${formatMoney(-mv.amount, t.currency, 0)} → ${other ? other.name : '?'}` : `⇄ +${formatMoney(mv.amount, t.currency, 0)} ← ${other ? other.name : '?'}`;
@@ -50,9 +55,9 @@ export function envelopesCard({ month, key, rerender }) {
     ]));
   });
   if (envs.length > 1) {
-    const moveBtn = el('button', { type: 'button', class: 'btn btn--ghost btn--sm', text: '⇄ ნაშთის გადატანა ერთიდან მეორეში' });
+    const moveBtn = el('button', { type: 'button', class: 'btn btn--ghost btn--sm', text: '⇄ ნაშთის გადატანა' });
     moveBtn.addEventListener('click', () => openMoveBudgetDialog(key, envs, month, rerender));
-    card.appendChild(el('div', { class: 'btn-row' }, [moveBtn]));
+    card.appendChild(el('div', { class: 'btn-row envelope-card__actions' }, [moveBtn]));
   }
   return card;
 }
@@ -132,10 +137,12 @@ function openMoveBudgetDialog(key, envs, month, rerender) {
 export function extrasCard(ctx) {
   const { month, key, categories, rerender } = ctx;
   const card = el('div', { class: 'card stat-card stat-card--wide extras-card' });
-  card.appendChild(el('div', { class: 'stat-card__label', ...tx('card.extras') }));
+  const { head, box } = cardHead(tx('card.extras'), 'დაუგეგმავი შენაძენები (ტანსაცმელი, აფთიაქი…) აქ ჩაწერე — აკლდება იმ ბიუჯეტს, რომლის ფულიდანაც იყიდე.', true);
+  card.appendChild(head);
   const extras = month.transactions.filter(isExtra).sort((a, b) => (b.paidAt || '').localeCompare(a.paidAt || ''));
   const total = extras.reduce((acc, t) => acc + (t.amountActual ?? t.amountPlanned ?? 0), 0);
   card.appendChild(el('div', { class: 'stat-card__value tabular-nums', text: formatMoney(total, 'EUR') }));
+  if (box) card.appendChild(box);
 
   // quick add: name + amount + where the money came from
   const envs = month.transactions.filter(isEnvelope);
@@ -172,7 +179,7 @@ export function extrasCard(ctx) {
   card.appendChild(el('div', { class: 'extras__form' }, [name, amount, from, add]));
 
   if (!extras.length) {
-    card.appendChild(el('div', { class: 'stat-card__sub', text: 'ბიუჯეტიდან ნაყიდი „სხვა" რამ (ფეხსაცმელი, წამალი…) აქ ჩაწერე — ის აკლდება იმ ბიუჯეტს (კვება, საწვავი), რომლის ფულიდანაც იყიდე.' }));
+    card.appendChild(el('div', { class: 'stat-card__sub', text: 'ამ თვეში დამატებითი ხარჯი ჯერ არ ჩაწერილა.' }));
     return card;
   }
   // "real food cost" = what was spent from the envelope minus the extras bought with it
@@ -192,6 +199,8 @@ export function extrasCard(ctx) {
   const list = el('div', { class: 'extras__list' });
   extras.forEach(x => {
     const env = envs.find(e => e.id === x.fromEnvelope);
+    const edit = el('button', { type: 'button', class: 'icon-btn icon-btn--sm', 'aria-label': `${x.name} — რედაქტირება`, text: '✎' });
+    edit.addEventListener('click', (e) => { e.stopPropagation(); openTransactionForm(x, key, rerender); });
     const del = el('button', { type: 'button', class: 'icon-btn icon-btn--sm', 'aria-label': `${x.name} — წაშლა`, text: '✕' });
     del.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -204,7 +213,7 @@ export function extrasCard(ctx) {
       el('div', { class: 'detail-row__name', text: x.name }),
       el('div', { class: 'detail-row__amount tabular-nums', text: formatMoney(x.amountActual ?? x.amountPlanned, 'EUR') }),
       el('div', { class: 'detail-row__meta', text: `${formatDate(x.paidAt || x.dueDate).slice(0, 5)}${env ? ` · ${genitive(env.name)} ფულიდან` : ' · ცალკე'}` }),
-      el('div', { class: 'detail-row__acts' }, [del])
+      el('div', { class: 'detail-row__acts' }, [edit, del])
     ]));
   });
   card.appendChild(list);

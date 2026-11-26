@@ -3,7 +3,7 @@
 import { getState, updateState, FREE_BUCKET_ID } from '../state.js';
 import { isTemplateDueInMonth, resolveTopCategory, gelToEur, formatMoney, parseAmountInput, ACCOUNT_LABELS } from '../calc.js';
 import { parseTemplatePack, addStarterTemplates } from '../starterPack.js';
-import { el, openModal, confirmDialog, toast, undoToast, formatDate } from '../ui.js';
+import { el, openModal, confirmDialog, toast, undoToast, formatDate, infoTip } from '../ui.js';
 import { budgetMonthKey } from '../state.js';
 import { getSelectedMonth, setSelectedMonth, monthLabel, shiftMonthKey } from '../monthNav.js';
 import { openPrepareWizard } from '../prepare.js';
@@ -22,7 +22,7 @@ function bucketOfCategory(state, category) {
   return top.parentId === FREE_BUCKET_ID ? freePseudoCategory() : top;
 }
 
-const TYPE_LABELS = { fixed: 'ფიქსირებული', variable: 'ცვლადი', envelope: '🛒 ბიუჯეტი (ნელ-ნელა იხარჯება)' };
+const TYPE_LABELS = { fixed: 'ფიქსირებული', variable: 'ცვლადი', envelope: '🛒 ყოველდღიური ბიუჯეტი' };
 
 const CYCLE_OPTIONS = [
   { value: 1, label: 'ყოველ თვე' },
@@ -61,7 +61,7 @@ export function renderTemplates(root) {
   const container = el('div', { class: 'templates-view' });
   root.appendChild(container);
 
-  const header = el('div', { class: 'btn-row' });
+  const header = el('div', { class: 'btn-row btn-row--split' });
   const addBtn = el('button', { class: 'btn btn--primary', ...tx('btn.newTemplate') });
 
   // Visual month preparation: opens on the current month if it isn't prepared yet, else the next one.
@@ -74,7 +74,7 @@ export function renderTemplates(root) {
   header.append(addBtn, nextBtn);
   container.appendChild(header);
 
-  // Bulk-add templates from a private JSON file (kept outside the public repo).
+  // Bulk-add templates from a private JSON file (kept outside the public repo) — placed cleanly at page bottom.
   const fileInput = el('input', { type: 'file', accept: '.json,application/json', style: 'display:none' });
   const fileBtn = el('button', { class: 'btn btn--ghost btn--sm', text: '📂 შაბლონების ფაილიდან დამატება' });
   fileBtn.addEventListener('click', () => fileInput.click());
@@ -95,11 +95,7 @@ export function renderTemplates(root) {
       toast(e instanceof SyntaxError ? 'ფაილი არ არის სწორი JSON' : e.message, 'error');
     }
   });
-  container.appendChild(el('div', { class: 'btn-row' }, [fileBtn, fileInput]));
-  container.appendChild(el('p', {
-    class: 'card__sub',
-    text: 'შაბლონი = ყოველთვიური (ან 2/3/6/12 თვეში ერთხელ) ხარჯის ნიმუში. ყოველი თვის დასაწყისში „📅 თვის მომზადება" გაჩვენებს, რომელი შაბლონები მოდის იმ თვეში — მონიშნავ, საჭიროებისამებრ შეცვლი თანხას და ერთი დაჭერით შექმნი. შექმნილი ხარჯები გადახდამდე თავისუფლად რედაქტირდება.'
-  }));
+  const tplTip = infoTip('შაბლონი = რეგულარული (ყოველთვიური ან 2/3/6/12-თვიანი) ხარჯის ნიმუში. ყოველი თვის დასაწყისში „📅 თვის მომზადება“ გაჩვენებს, რომელი შაბლონები მოდის — მონიშნავ, საჭიროებისამებრ შეცვლი თანხას და ერთი შეხებით შექმნი.');
 
   // ---- filter & sort (remembered on this device) ----
   const f = Object.assign({ q: '', group: 'all', payer: 'all', status: 'active', sort: 'group' }, getUiPref('tplFilter', {}));
@@ -112,16 +108,15 @@ export function renderTemplates(root) {
     s1.addEventListener('change', () => { f[key] = s1.value; save(); });
     return s1;
   };
-  container.appendChild(el('div', { class: 'tpl-toolbar' }, [
-    search,
-    sel('group', [['all', 'ყველა ჯგუფი'], ...TEMPLATE_GROUPS.map(([k, title]) => [k, title])]),
-    sel('payer', [['all', '👥 ყველა'], ['shared', personTag('shared')], ['giorgi', personTag('giorgi')], ['nino', personTag('nino')]]),
-    sel('status', [['active', 'მხოლოდ ჩართული'], ['inactive', 'მხოლოდ გამორთული'], ['all', 'ჩართული + გამორთული']]),
-    sel('sort', [['group', '↕ ჯგუფებით'], ['name', '↕ სახელით (ა-ჰ)'], ['amountDesc', '↕ თანხით (დიდიდან)'], ['amountAsc', '↕ თანხით (პატარიდან)'], ['next', '↕ შემდეგი გადახდით']])
-  ]));
+  const groupSel = sel('group', [['all', 'ყველა ჯგუფი'], ...TEMPLATE_GROUPS.map(([k, title]) => [k, title])]);
+  const payerSel = sel('payer', [['all', '👥 ყველა'], ['shared', personTag('shared')], ['giorgi', personTag('giorgi')], ['nino', personTag('nino')]]);
+  const statusSel = sel('status', [['active', 'აქტიური'], ['inactive', 'გამორთული'], ['all', 'ყველა']]);
+  const sortSel = sel('sort', [['group', '↕ ჯგუფებით'], ['name', '↕ სახელით (ა-ჰ)'], ['amountDesc', '↕ თანხით (დიდიდან)'], ['amountAsc', '↕ თანხით (პატარიდან)'], ['next', '↕ შემდეგი გადახდით']]);
+  container.appendChild(el('div', { class: 'tpl-toolbar' }, [search, groupSel, payerSel, statusSel, sortSel]));
 
   const list = el('div', { class: 'list' });
   container.appendChild(list);
+  container.appendChild(el('div', { class: 'btn-row tpl-footer' }, [fileBtn, fileInput]));
 
   function draw() {
     const state = getState();
@@ -137,7 +132,11 @@ export function renderTemplates(root) {
     const previewRate = (state.months[getSelectedMonth()] || state.months[budgetMonthKey()] || {}).exchangeRate || 3;
     const monthlyEur = (t) => (t.currency === 'GEL' ? gelToEur(t.amount, previewRate) : t.amount) / (t.oneTime ? Infinity : (t.cycleMonths || 1));
     const active = state.templates.filter(t => t.active);
-    list.appendChild(el('div', { class: 'tpl-summary tabular-nums', text: `${active.length} აქტიური შაბლონი · თვეში საშუალოდ ≈ ${formatMoney(active.reduce((s, t) => s + monthlyEur(t), 0), 'EUR', 0)}` }));
+    list.appendChild(el('div', { class: 'tpl-summary-bar' }, [
+      el('div', { class: 'tpl-summary tabular-nums', text: `${active.length} აქტიური შაბლონი · თვეში საშუალოდ ≈ ${formatMoney(active.reduce((s, t) => s + monthlyEur(t), 0), 'EUR', 0)}` }),
+      tplTip.btn
+    ]));
+    list.appendChild(tplTip.box);
 
     const q = f.q.trim().toLowerCase();
     const shown = state.templates.filter(tp =>
@@ -145,7 +144,18 @@ export function renderTemplates(root) {
       (f.group === 'all' || groupOfTemplate(state.categories, tp) === f.group) &&
       (f.payer === 'all' || (tp.account || 'shared') === f.payer) &&
       (f.status === 'all' || (f.status === 'active' ? tp.active : !tp.active)));
-    if (!shown.length) list.appendChild(el('div', { class: 'empty-state', text: 'ფილტრს არაფერი შეესაბამება' }));
+    if (!shown.length) {
+      const reset = el('button', { type: 'button', class: 'btn btn--secondary btn--sm', text: '↺ ფილტრების გასუფთავება' });
+      reset.addEventListener('click', () => {
+        Object.assign(f, { q: '', group: 'all', payer: 'all', status: 'active' });
+        search.value = ''; groupSel.value = 'all'; payerSel.value = 'all'; statusSel.value = 'active';
+        save();
+      });
+      list.appendChild(el('div', { class: 'empty-state' }, [
+        el('div', { text: 'ფილტრს არაფერი შეესაბამება' }),
+        el('div', { class: 'btn-row', style: 'justify-content:center' }, [reset])
+      ]));
+    }
     const eurOf = (tp) => (tp.currency === 'GEL' ? gelToEur(tp.amount, previewRate) : tp.amount);
     if (f.sort === 'group') {
       TEMPLATE_GROUPS.forEach(([groupKey, groupTitle]) => {
@@ -232,7 +242,7 @@ export function renderTemplates(root) {
       const deleteBtn = el('button', { class: 'icon-btn', 'aria-label': 'წაშლა', text: '🗑' });
       deleteBtn.addEventListener('click', async () => {
         const ok = await confirmDialog(
-          'შაბლონის წაშლა შეაჩერებს მომავალ თვეებში ტრანზაქციების გენერაციას. უკვე შექმნილი ტრანზაქციები წარსულ/მიმდინარე თვეებში დარჩება უცვლელი. დარწმუნებული ხართ?',
+          'შაბლონის წაშლა შეაჩერებს მომავალ თვეებში ხარჯების ავტომატურ დამატებას. უკვე შექმნილი ჩანაწერები უცვლელი დარჩება. წავშალო?',
           { danger: true, confirmLabel: 'წაშლა' }
         );
         if (!ok) return;
@@ -379,7 +389,7 @@ function openTemplateForm(existing, onSaved) {
     labeledField('თანხა', amountInput),
     labeledField('ვალუტა', currencySelect),
     eurPreview,
-    labeledField('ციკლი', cycleSelect),
+    labeledField('პერიოდულობა', cycleSelect),
     labeledField('გადახდის თარიღი', dateInput),
     labeledField('ვინ იხდის (ვისი ანგარიშიდან იჭრება)', accountSelect),
     applyField,
@@ -398,10 +408,10 @@ function openTemplateForm(existing, onSaved) {
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     const name = nameField.value.trim();
-    if (!name) { toast('შეავსეთ სახელი', 'error'); return; }
+    if (!name) { toast('შეავსე სახელი', 'error'); return; }
     const amount = parseAmountInput(amountInput.value);
-    if (amount <= 0) { toast('შეიყვანეთ სწორი თანხა', 'error'); return; }
-    if (!dateInput.value) { toast('აირჩიეთ თარიღი', 'error'); return; }
+    if (amount <= 0) { toast('ჩაწერე სწორი თანხა', 'error'); return; }
+    if (!dateInput.value) { toast('აირჩიე თარიღი', 'error'); return; }
 
     const oneTime = cycleSelect.value === 'oneTime';
     const cycleMonths = oneTime ? 1 : Number(cycleSelect.value);
